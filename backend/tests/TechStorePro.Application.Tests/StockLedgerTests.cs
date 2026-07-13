@@ -1,5 +1,6 @@
 using TechStorePro.Application.Common.Exceptions;
 using TechStorePro.Application.Common.Interfaces;
+using TechStorePro.Application.Inventory.Adjustments;
 using TechStorePro.Application.Inventory.Queries;
 using TechStorePro.Application.Inventory.Services;
 using TechStorePro.Domain.Catalog;
@@ -504,6 +505,59 @@ public class StockLedgerTests : IAsyncLifetime
             "a corrupted average that has been traded on must not be laundered by the trade");
 
         audit.Discrepancies.Should().ContainSingle().Which.Kind.Should().Be(DiscrepancyKind.Cost);
+    }
+
+    // --- The document, not just the ledger ------------------------------------------------------
+
+    [Fact]
+    public async Task An_adjustment_posts_the_ledger_and_persists_its_own_lines()
+    {
+        // This runs the real CreateAdjustmentCommandHandler, not a hand-built document, and that is the
+        // entire point of it.
+        //
+        // Every other test in this file builds its documents with DbSet.Add(parent), which cascades the
+        // Added state to the children. The handler cannot: IStockLedger.PostAsync saves inside the
+        // handler's transaction (it must — the movement and the balance are one write), so by the time
+        // the adjustment's lines are attached, the adjustment itself is already Unchanged. A child found
+        // on an Unchanged parent with an id already set — BaseEntity assigns Guid.NewGuid() — is taken by
+        // EF for an existing row, and it emits an UPDATE against a line that was never inserted. Zero
+        // rows match and the whole adjustment dies with DbUpdateConcurrencyException.
+        //
+        // Which is to say: the endpoint was a 500 on every call, and a suite that only ever used
+        // DbSet.Add could never have seen it.
+        await using var db = CreateContext(_companyA);
+
+        var handler = new CreateAdjustmentCommandHandler(
+            db,
+            Ledger(db),
+            new DocumentNumberGenerator(new ApplicationDbContextAccessor(db), db, new StubTenant(_companyA), new StubClock()),
+            new StubClock());
+
+        var adjustmentId = await handler.Handle(
+            new CreateAdjustmentCommand(
+                WarehouseId: _warehouseOfA,
+                BranchId: _branchOfA,
+                Reason: AdjustmentReason.OpeningStock,
+                Explanation: "Opening stock",
+                Lines: [new CreateAdjustmentLine(ProductId: _cable, Quantity: 10, UnitCost: 100m)]),
+            CancellationToken.None);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var adjustment = await fresh.StockAdjustments
+            .Include(a => a.Lines)
+            .FirstAsync(a => a.Id == adjustmentId);
+
+        adjustment.Number.Should().NotBeNullOrWhiteSpace("the document takes a gapless number");
+        adjustment.Lines.Should().ContainSingle("the line must actually be inserted, not UPDATEd into thin air");
+        adjustment.Lines.Single().Quantity.Should().Be(10);
+
+        // And the ledger moved with it, in the same transaction.
+        var balance = await fresh.StockBalances.SingleAsync(b => b.ProductId == _cable);
+        balance.Quantity.Should().Be(10);
+        balance.AverageCost.Should().Be(100m);
+
+        (await new BalanceAuditor(fresh).AuditAsync()).Agrees.Should().BeTrue();
     }
 
     // --- Tenancy --------------------------------------------------------------------------------

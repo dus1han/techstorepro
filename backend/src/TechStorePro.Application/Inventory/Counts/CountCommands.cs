@@ -317,6 +317,11 @@ public class CountLineCommandHandler : IRequestHandler<CountLineCommand, Guid>
             Notes = request.Notes
         };
 
+        // Through the DbSet, not only the navigation collection: `count` was loaded from the database
+        // and is Unchanged, and a child discovered on an Unchanged parent with an id already set is
+        // taken by EF for an existing row — it would UPDATE a line that has never been inserted, match
+        // zero rows, and throw. Every scan on the shelf would fail.
+        _db.StockCountLines.Add(line);
         count.Lines.Add(line);
 
         await _db.SaveChangesAsync(cancellationToken);
@@ -457,7 +462,7 @@ public class ApproveCountCommandHandler : IRequestHandler<ApproveCountCommand, G
 
             foreach (var movement in result.Movements)
             {
-                adjustment.Lines.Add(new StockAdjustmentLine
+                var adjustmentLine = new StockAdjustmentLine
                 {
                     StockAdjustmentId = adjustment.Id,
                     ProductId = line.ProductId,
@@ -465,7 +470,13 @@ public class ApproveCountCommandHandler : IRequestHandler<ApproveCountCommand, G
                     Quantity = movement.Quantity,
                     UnitCost = movement.UnitCost,
                     Notes = line.Notes
-                });
+                };
+
+                // Through the DbSet: PostAsync has already saved, so `adjustment` is Unchanged and EF
+                // would take these lines for existing rows and UPDATE nothing. See the same note in
+                // CreateAdjustmentCommandHandler.
+                _db.StockAdjustmentLines.Add(adjustmentLine);
+                adjustment.Lines.Add(adjustmentLine);
             }
         }
 

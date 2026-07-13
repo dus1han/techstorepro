@@ -269,7 +269,7 @@ public class CreateAdjustmentCommandHandler : IRequestHandler<CreateAdjustmentCo
             // asked for — on a write-off those differ, and the document must show what really happened.
             foreach (var movement in result.Movements)
             {
-                adjustment.Lines.Add(new StockAdjustmentLine
+                var documentLine = new StockAdjustmentLine
                 {
                     StockAdjustmentId = adjustment.Id,
                     ProductId = line.ProductId,
@@ -277,7 +277,17 @@ public class CreateAdjustmentCommandHandler : IRequestHandler<CreateAdjustmentCo
                     Quantity = movement.Quantity,
                     UnitCost = movement.UnitCost,
                     Notes = line.Notes
-                });
+                };
+
+                // Added through the DbSet, not only through the navigation collection. PostAsync above
+                // has already saved — the ledger writes the movement and the balance in one transaction —
+                // so `adjustment` is Unchanged by now, and a child discovered on an Unchanged parent with
+                // an id already set (BaseEntity assigns Guid.NewGuid()) is taken for an existing row. EF
+                // would emit an UPDATE against a line that has never been inserted, match zero rows, and
+                // throw DbUpdateConcurrencyException. The navigation still gets it, because Validate()
+                // below counts the lines.
+                _db.StockAdjustmentLines.Add(documentLine);
+                adjustment.Lines.Add(documentLine);
             }
         }
 
