@@ -50,6 +50,17 @@ export const FEATURES = {
   discounts: "catalog.discounts",
   paymentMethods: "catalog.payment_methods",
   currencies: "catalog.currencies",
+
+  // P3 — inventory. Stock and movements are read-only at every permission level: the only way stock
+  // moves is through a document that leaves a reason and a name behind it.
+  stock: "inventory.stock",
+  stockMovements: "inventory.movements",
+  adjustments: "inventory.adjustments",
+  transfers: "inventory.transfers",
+  stockCounts: "inventory.counts",
+  reservations: "inventory.reservations",
+  serials: "inventory.serials",
+  barcodes: "inventory.barcodes",
 } as const;
 
 export interface Permission {

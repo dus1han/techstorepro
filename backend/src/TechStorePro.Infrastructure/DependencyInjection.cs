@@ -1,9 +1,13 @@
 using TechStorePro.Application.Catalog.Services;
 using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Application.Identity.Services;
+using TechStorePro.Application.Inventory.Barcodes;
+using TechStorePro.Application.Inventory.Services;
+using TechStorePro.Domain.Inventory;
 using TechStorePro.Infrastructure.Catalog;
 using TechStorePro.Infrastructure.Configuration;
 using TechStorePro.Infrastructure.Identity;
+using TechStorePro.Infrastructure.Inventory;
 using TechStorePro.Infrastructure.Persistence;
 using TechStorePro.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
@@ -55,6 +59,33 @@ public static class DependencyInjection
 
         // P2. Sales (P5) will call this and snapshot the result onto the invoice line.
         services.AddScoped<IPriceResolver, PriceResolver>();
+
+        // P3 — the stock ledger. Registered once, injected everywhere stock moves, and the only thing
+        // in the system permitted to write stock_movements, stock_balances or a serial's status
+        // (architecture.md §4.5).
+        //
+        // Weighted average is the only costing strategy shipped (§45 D1). The interface exists so FIFO
+        // stays a second implementation rather than a rewrite; nothing else is planned.
+        services.AddSingleton<ICostingStrategy, WeightedAverageCosting>();
+        services.AddScoped<IStockLedger, StockLedger>();
+        services.AddSingleton<ILabelRenderer, LabelRenderer>();
+
+        // The cache must be able to prove itself. One implementation, shared by the /balance-audit
+        // endpoint and the nightly job — a job with its own copy of the arithmetic could pass while
+        // the endpoint failed, and "the nightly job is green" would then mean nothing.
+        services.AddScoped<IBalanceAuditor, BalanceAuditor>();
+
+        // Sweeps expired reservations and proves the balances against the ledger, per company, forever.
+        // Without it, requirements §20's "release reservation" has no answer for the reservations that
+        // nobody releases, and the ledger-vs-cache guarantee is asserted but never checked.
+        services.Configure<InventoryMaintenanceOptions>(
+            configuration.GetSection(InventoryMaintenanceOptions.Section));
+        services.AddHostedService<InventoryMaintenanceService>();
+
+        // QuestPDF's Community licence: free for companies below the revenue threshold, which every
+        // shop this product targets is. It must be set before the first document is rendered, and the
+        // library throws a licence exception rather than watermarking if it is not.
+        QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 
         services.AddScoped<ReferenceDataSeeder>();
 

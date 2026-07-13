@@ -114,23 +114,60 @@ fx_rates             id, company_id, currency_code, rate_to_base, rate_date
 
 ```
 stock_movements      id, company_id, branch_id, warehouse_id, product_id, serial_id (null),
-                     movement_type, quantity (signed), unit_cost, reference_type,
-                     reference_id, occurred_at
-stock_balances       company_id, warehouse_id, product_id, quantity, reserved_quantity,
+                     movement_type, quantity (signed), unit_cost, average_cost_after,
+                     balance_after, reference_type, reference_id, reference_number,
+                     notes, occurred_at
+stock_balances       id, company_id, warehouse_id, product_id, quantity, reserved_quantity,
                      average_cost
-                     -- materialised from movements; PK (company_id, warehouse_id, product_id)
-stock_reservations   id, company_id, warehouse_id, product_id, quantity,
-                     reference_type, reference_id, expires_at, released_at, status
-stock_counts         id, company_id, warehouse_id, status, counted_at, approved_by
-stock_count_lines    id, stock_count_id, product_id, counted_qty, system_qty, variance
+                     -- a cache of movements; unique (company_id, warehouse_id, product_id)
+stock_reservations   id, company_id, warehouse_id, product_id, serial_id (null), quantity,
+                     fulfilled_quantity, reference_type, reference_id, expires_at,
+                     released_at, status
+stock_adjustments    id, company_id, branch_id, warehouse_id, number, reason, explanation,
+                     stock_count_id (null), adjusted_at
+stock_adjustment_lines  id, company_id, stock_adjustment_id, product_id, serial_id (null),
+                     quantity (signed), unit_cost, notes
+stock_transfers      id, company_id, branch_id, number, from_warehouse_id, to_warehouse_id,
+                     status, shipped_at, shipped_by, received_at, received_by, notes
+stock_transfer_lines id, company_id, stock_transfer_id, product_id, serial_id (null),
+                     quantity, received_quantity, unit_cost
+stock_counts         id, company_id, branch_id, warehouse_id, number, status, started_at,
+                     counted_at, approved_by, approved_at, stock_adjustment_id (null)
+stock_count_lines    id, company_id, stock_count_id, product_id, serial_id (null),
+                     system_quantity, counted_quantity, unit_cost, notes
+serial_events        id, company_id, serial_id, type, status, warehouse_id, reference_type,
+                     reference_id, reference_number, notes, at
+barcode_print_jobs   id, company_id, source_type, source_id, symbology, template,
+                     label_count, include_price, include_product_name, printed_at
 ```
+
+**A transfer is two movements, not one.** Stock leaves the source when the van is loaded
+(`TransferOut`) and arrives when someone signs for it (`TransferIn`), which may be days later and may
+be for fewer units. A single instantaneous movement would make in-transit stock either sellable at
+both ends or sellable at neither, and would leave a short delivery nowhere to be recorded.
+
+**A count snapshots the system quantity onto the line when the line is counted**, not at approval. A
+count that took two hours while the shop kept trading would otherwise compare this morning's shelf
+against this afternoon's ledger and invent a variance out of the sales that happened in between.
+
+`stock_movements`, `stock_balances` and `serial_events` are **not soft-deletable**: a ledger you can
+retire a row from is not a ledger, and a balance of zero is a fact rather than a retired row. A
+correction is a new, opposing movement.
 
 Stock is keyed by **warehouse**, not branch. `branch_id` stays on the movement for reporting, but
 the balance a sale decrements is a warehouse balance.
 
 `stock_movements` is append-only and is the source of truth; `stock_balances` is a cache kept
-in the same transaction as the movement that changes it. Reads hit the balance table; audits
-recompute from movements and must agree.
+in the same transaction as the movement that changes it, with the balance row locked
+(`INSERT … ON CONFLICT DO NOTHING`, then `SELECT … FOR UPDATE` — the upsert exists because
+`FOR UPDATE` locks nothing when the row does not yet exist). Reads hit the balance table.
+
+**The cache must be able to prove itself.** `GET /api/v1/inventory/balance-audit` recomputes every
+balance from the ledger, and the `InventoryMaintenanceService` runs the same audit nightly, per
+company. It compares **quantity and cost**: a cache whose units are right and whose average cost is
+wrong looks healthy while every sale from that warehouse books the wrong COGS into the P&L. It
+reports; it never repairs — a disagreement means something wrote stock outside `IStockLedger`, and
+overwriting the evidence would destroy the only trace of it.
 
 `available = quantity - reserved_quantity`. That subtraction is what requirements §20's "prevent
 overselling" actually means.

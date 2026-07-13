@@ -51,6 +51,16 @@ public static class FeatureCatalog
     public const string PaymentMethods = "catalog.payment_methods";
     public const string Currencies = "catalog.currencies";
 
+    // --- P3: inventory ---
+    public const string Stock = "inventory.stock";
+    public const string StockMovements = "inventory.movements";
+    public const string Adjustments = "inventory.adjustments";
+    public const string Transfers = "inventory.transfers";
+    public const string StockCounts = "inventory.counts";
+    public const string Reservations = "inventory.reservations";
+    public const string Serials = "inventory.serials";
+    public const string Barcodes = "inventory.barcodes";
+
     private static readonly PermissionAction[] ReadOnly = [PermissionAction.View, PermissionAction.Export];
 
     private static readonly PermissionAction[] Full =
@@ -93,7 +103,29 @@ public static class FeatureCatalog
         new() { Code = Pricing, Module = "Master data", Name = "Price tiers & lists", DisplayOrder = 170, SupportedActions = ManageAndApprove },
         new() { Code = Discounts, Module = "Master data", Name = "Discounts", DisplayOrder = 180, SupportedActions = ManageAndApprove },
         new() { Code = PaymentMethods, Module = "Master data", Name = "Payment methods", DisplayOrder = 190, SupportedActions = Manage },
-        new() { Code = Currencies, Module = "Master data", Name = "Currencies & FX", DisplayOrder = 200, SupportedActions = Manage }
+        new() { Code = Currencies, Module = "Master data", Name = "Currencies & FX", DisplayOrder = 200, SupportedActions = Manage },
+
+        // Inventory. Note what is read-only and what is not — this is where the module's controls live.
+        //
+        // Stock and movements cannot be Created or Edited by anyone, at any permission level: the only
+        // way stock moves is through a document (an adjustment, a transfer, an approved count) that
+        // leaves a reason and a name behind it. A "create stock movement" permission would be a licence
+        // to conjure inventory out of nothing, and the audit trail would show it as nobody's decision.
+        new() { Code = Stock, Module = "Inventory", Name = "Stock on hand", DisplayOrder = 210, SupportedActions = ReadOnly },
+        new() { Code = StockMovements, Module = "Inventory", Name = "Stock movements", DisplayOrder = 220, SupportedActions = ReadOnly },
+
+        // Adjustments post immediately and can write stock off. Create is therefore the dangerous
+        // grant, not Approve — there is no approval step to hide behind (requirements §21 puts
+        // approval behind counts, not adjustments).
+        new() { Code = Adjustments, Module = "Inventory", Name = "Stock adjustments", DisplayOrder = 230, SupportedActions = Manage },
+        new() { Code = Transfers, Module = "Inventory", Name = "Stock transfers", DisplayOrder = 240, SupportedActions = Manage },
+
+        // Approve is the one that matters: approving a count authorises the write-off it computed.
+        new() { Code = StockCounts, Module = "Inventory", Name = "Physical stock counts", DisplayOrder = 250, SupportedActions = ManageAndApprove },
+
+        new() { Code = Reservations, Module = "Inventory", Name = "Stock reservations", DisplayOrder = 260, SupportedActions = Manage },
+        new() { Code = Serials, Module = "Inventory", Name = "Serial numbers", DisplayOrder = 270, SupportedActions = [PermissionAction.View, PermissionAction.Export, PermissionAction.Print] },
+        new() { Code = Barcodes, Module = "Inventory", Name = "Barcodes & labels", DisplayOrder = 280, SupportedActions = [PermissionAction.View, PermissionAction.Print] }
     ];
 
     public static bool Exists(string code) => All.Any(f => f.Code == code);

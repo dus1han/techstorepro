@@ -133,28 +133,60 @@ not invoice twice.
 
 Updates to documents carry a `rowVersion`; a mismatch is a `409`, not a silent overwrite.
 
-## 6. Planned endpoints
+## 6. Endpoints
 
-Grouped by module, in build order. None exist yet.
+Grouped by module, in build order. **P1–P3 are built** (identity, master data, inventory); everything
+from purchasing down is still planned.
 
 ```
-# Master data
+# Master data — built (P2), reference-data edit/retire added in P3
 GET    /api/v1/products                 ?search=&categoryId=&page=&pageSize=
 POST   /api/v1/products
 GET    /api/v1/products/{id}
 PUT    /api/v1/products/{id}
-DELETE /api/v1/products/{id}            soft delete
-GET    /api/v1/products/{id}/serials
+DELETE /api/v1/products/{id}            soft delete; refused if the product still has stock
 GET    /api/v1/customers                POST/PUT/DELETE alike
 GET    /api/v1/suppliers
 GET    /api/v1/branches
 
-# Inventory
-GET    /api/v1/inventory/stock          ?branchId=&productId=&lowStock=true
-GET    /api/v1/inventory/movements      ?productId=&from=&to=
-POST   /api/v1/inventory/adjustments
-POST   /api/v1/inventory/transfers
-POST   /api/v1/inventory/counts         and /{id}/approve
+# Reference data — all six now support edit and retire (P3 closed the create-only gap)
+GET    /api/v1/categories               POST, PUT /{id}, DELETE /{id}?reason=
+GET    /api/v1/brands                   POST, PUT /{id}, DELETE /{id}?reason=
+GET    /api/v1/price-tiers              POST, PUT /{id}, DELETE /{id}?reason=
+GET    /api/v1/discounts                POST, PUT /{id}, DELETE /{id}?reason=
+GET    /api/v1/payment-methods          POST, PUT /{id}, DELETE /{id}?reason=
+GET    /api/v1/tax-rates                POST, PUT /{id}, DELETE /{id}?reason=
+POST   /api/v1/tax-rates/{id}/supersede the rate changed: closes this one, opens its successor.
+                                        PUT cannot change the percent — that would restate the tax
+                                        on invoices already issued.
+
+# Inventory — built (P3)
+GET    /api/v1/inventory/stock          ?warehouseId=&productId=&lowStock=true   stock on hand
+GET    /api/v1/inventory/movements      ?productId=&warehouseId=&type=&from=&to= the stock card
+GET    /api/v1/inventory/historical     ?asOf=   opening/purchases/sales/transfers/adjustments/closing
+GET    /api/v1/inventory/valuation      ?warehouseId=   stock at weighted average
+GET    /api/v1/inventory/balance-audit  recomputes balances from the ledger; proves the cache
+
+GET    /api/v1/inventory/adjustments    POST, GET /{id}
+POST   /api/v1/inventory/adjustments    posts immediately — no approval step, mandatory reason
+
+GET    /api/v1/inventory/transfers      POST, GET /{id}
+POST   /api/v1/inventory/transfers/{id}/ship      posts TransferOut
+POST   /api/v1/inventory/transfers/{id}/receive   posts TransferIn for what actually arrived
+DELETE /api/v1/inventory/transfers/{id}           draft only: shipped stock cannot be un-shipped
+
+GET    /api/v1/inventory/counts         POST, GET /{id}
+POST   /api/v1/inventory/counts/{id}/lines        one scan; snapshots system qty at scan time
+POST   /api/v1/inventory/counts/{id}/submit
+POST   /api/v1/inventory/counts/{id}/approve      separate permission: it authorises the write-off
+DELETE /api/v1/inventory/counts/{id}
+
+GET    /api/v1/inventory/reservations   POST, DELETE /{id}
+POST   /api/v1/inventory/reservations/expire      sweeps past-deadline holds (also run nightly)
+
+GET    /api/v1/inventory/serials        ?productId=&status=&warehouseId=
+GET    /api/v1/inventory/serials/{serialNumber}   full history — the warranty-claim query
+POST   /api/v1/inventory/labels/print   returns a PDF (Code128 / EAN-13 / QR; thermal or A4 sheet)
 
 # Purchasing and imports
 GET    /api/v1/purchase-orders          POST, /{id}/approve, /{id}/cancel

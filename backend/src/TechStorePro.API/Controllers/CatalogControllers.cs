@@ -175,6 +175,25 @@ public class BrandsController : ApiControllerBase
     [HttpPost]
     public async Task<ActionResult<Guid>> Create(CreateBrandCommand command) =>
         Ok(await Mediator.Send(command));
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, UpdateBrandCommand command)
+    {
+        if (id != command.Id)
+        {
+            return BadRequest("Route id and body id differ.");
+        }
+
+        await Mediator.Send(command);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] string reason)
+    {
+        await Mediator.Send(new DeleteBrandCommand(id, reason));
+        return NoContent();
+    }
 }
 
 /// <summary>Tax rates — effective-dated, per requirements §11.</summary>
@@ -188,6 +207,42 @@ public class TaxRatesController : ApiControllerBase
     [HttpPost]
     public async Task<ActionResult<Guid>> Create(CreateTaxRateCommand command) =>
         Ok(await Mediator.Send(command));
+
+    /// <summary>
+    /// Renames a rate, or activates/deactivates it. <b>It cannot change the percentage</b> — that is
+    /// what <see cref="Supersede"/> is for, because editing the percent in place would restate the tax
+    /// on invoices that have already been issued.
+    /// </summary>
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, UpdateTaxRateCommand command)
+    {
+        if (id != command.Id)
+        {
+            return BadRequest("Route id and body id differ.");
+        }
+
+        await Mediator.Send(command);
+        return NoContent();
+    }
+
+    /// <summary>The rate changed. Closes this one and opens its successor; returns the new rate's id.</summary>
+    [HttpPost("{id:guid}/supersede")]
+    public async Task<ActionResult<Guid>> Supersede(Guid id, SupersedeTaxRateCommand command)
+    {
+        if (id != command.Id)
+        {
+            return BadRequest("Route id and body id differ.");
+        }
+
+        return Ok(await Mediator.Send(command));
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] string reason)
+    {
+        await Mediator.Send(new DeleteTaxRateCommand(id, reason));
+        return NoContent();
+    }
 }
 
 /// <summary>Price tiers (requirements §31) and discounts (§32).</summary>
@@ -201,6 +256,25 @@ public class PriceTiersController : ApiControllerBase
     [HttpPost]
     public async Task<ActionResult<Guid>> Create(CreatePriceTierCommand command) =>
         Ok(await Mediator.Send(command));
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, UpdatePriceTierCommand command)
+    {
+        if (id != command.Id)
+        {
+            return BadRequest("Route id and body id differ.");
+        }
+
+        await Mediator.Send(command);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] string reason)
+    {
+        await Mediator.Send(new DeletePriceTierCommand(id, reason));
+        return NoContent();
+    }
 }
 
 /// <summary>
@@ -245,6 +319,29 @@ public class DiscountsController : ApiControllerBase
     [HttpPost]
     public async Task<ActionResult<Guid>> Create(CreateDiscountCommand command) =>
         Ok(await Mediator.Send(command));
+
+    /// <summary>
+    /// Edits the rule. What it applies <em>to</em> — the product, the customer — is fixed at creation:
+    /// repointing a discount at a different customer would rewrite what was agreed with the first.
+    /// </summary>
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, UpdateDiscountCommand command)
+    {
+        if (id != command.Id)
+        {
+            return BadRequest("Route id and body id differ.");
+        }
+
+        await Mediator.Send(command);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] string reason)
+    {
+        await Mediator.Send(new DeleteDiscountCommand(id, reason));
+        return NoContent();
+    }
 }
 
 /// <summary>Payment methods (requirements §23).</summary>
@@ -258,6 +355,25 @@ public class PaymentMethodsController : ApiControllerBase
     [HttpPost]
     public async Task<ActionResult<Guid>> Create(CreatePaymentMethodCommand command) =>
         Ok(await Mediator.Send(command));
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, UpdatePaymentMethodCommand command)
+    {
+        if (id != command.Id)
+        {
+            return BadRequest("Route id and body id differ.");
+        }
+
+        await Mediator.Send(command);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] string reason)
+    {
+        await Mediator.Send(new DeletePaymentMethodCommand(id, reason));
+        return NoContent();
+    }
 }
 
 /// <summary>Currencies and FX rates (requirements §26).</summary>

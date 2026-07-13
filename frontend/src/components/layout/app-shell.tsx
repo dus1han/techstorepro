@@ -34,6 +34,17 @@ const NAV: { section: string; items: NavItem[] }[] = [
     ],
   },
   {
+    section: "Inventory",
+    items: [
+      { href: "/inventory/stock", label: "Stock on hand", feature: FEATURES.stock },
+      { href: "/inventory/movements", label: "Stock movements", feature: FEATURES.stockMovements },
+      { href: "/inventory/adjustments", label: "Adjustments", feature: FEATURES.adjustments },
+      { href: "/inventory/transfers", label: "Transfers", feature: FEATURES.transfers },
+      { href: "/inventory/counts", label: "Stock counts", feature: FEATURES.stockCounts },
+      { href: "/inventory/serials", label: "Serial numbers", feature: FEATURES.serials },
+    ],
+  },
+  {
     section: "Settings",
     items: [
       { href: "/settings/branches", label: "Branches", feature: FEATURES.branches },

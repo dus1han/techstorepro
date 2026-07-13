@@ -2,6 +2,7 @@ using TechStorePro.Domain.Auditing;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Identity;
+using TechStorePro.Domain.Inventory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -51,6 +52,24 @@ public interface IApplicationDbContext
     DbSet<PaymentMethod> PaymentMethods { get; }
     DbSet<Currency> Currencies { get; }
     DbSet<FxRate> FxRates { get; }
+
+    // --- Inventory (P3) ----------------------------------------------------------------------
+    //
+    // StockMovements and StockBalances are exposed for *reading*. Writing them is the exclusive
+    // business of IStockLedger — a handler that appends a movement by hand bypasses the row lock, the
+    // costing and the availability check all at once. See architecture.md §4.5.
+    DbSet<StockMovement> StockMovements { get; }
+    DbSet<StockBalance> StockBalances { get; }
+    DbSet<Serial> Serials { get; }
+    DbSet<SerialEvent> SerialEvents { get; }
+    DbSet<StockReservation> StockReservations { get; }
+    DbSet<StockTransfer> StockTransfers { get; }
+    DbSet<StockTransferLine> StockTransferLines { get; }
+    DbSet<StockAdjustment> StockAdjustments { get; }
+    DbSet<StockAdjustmentLine> StockAdjustmentLines { get; }
+    DbSet<StockCount> StockCounts { get; }
+    DbSet<StockCountLine> StockCountLines { get; }
+    DbSet<BarcodePrintJob> BarcodePrintJobs { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 

@@ -1,6 +1,7 @@
 using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Identity;
+using TechStorePro.Domain.Inventory;
 using TechStorePro.Infrastructure.Persistence;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -183,6 +184,193 @@ public class CrossTenantIsolationTests : IAsyncLifetime
         var act = async () => await asB.SaveChangesAsync();
 
         await act.Should().NotThrowAsync("SKU uniqueness is scoped to the company");
+    }
+
+    [Fact]
+    public async Task Inventory_is_isolated_per_company_too()
+    {
+        // P3 added the stock ledger, and with it the tables that hold what a shop is actually worth.
+        // Every one of them is tenant-scoped, and an entity that forgot ITenantScoped would pass every
+        // other test in this suite and leak one company's inventory into another's stock report.
+        await using var asA = CreateContext(_companyA);
+
+        var warehouse = new Warehouse
+        {
+            CompanyId = _companyA,
+            BranchId = _branchOfA,
+            Name = "A Store",
+            Code = "A-STORE"
+        };
+
+        var product = new Product
+        {
+            CompanyId = _companyA,
+            ItemCode = "A-INV",
+            Sku = "A-INV",
+            Name = "A's stock item",
+            Unit = "each",
+            TrackingMode = TrackingMode.Serial
+        };
+
+        asA.Warehouses.Add(warehouse);
+        asA.Products.Add(product);
+        await asA.SaveChangesAsync();
+
+        asA.StockBalances.Add(new StockBalance
+        {
+            CompanyId = _companyA,
+            WarehouseId = warehouse.Id,
+            ProductId = product.Id,
+            Quantity = 10,
+            AverageCost = 100m
+        });
+
+        asA.StockMovements.Add(new StockMovement
+        {
+            CompanyId = _companyA,
+            WarehouseId = warehouse.Id,
+            BranchId = _branchOfA,
+            ProductId = product.Id,
+            Type = MovementType.Receipt,
+            Quantity = 10,
+            UnitCost = 100m,
+            AverageCostAfter = 100m,
+            BalanceAfter = 10,
+            ReferenceType = StockReferenceType.GoodsReceipt,
+            OccurredAt = DateTimeOffset.UnixEpoch
+        });
+
+        var serial = new Serial
+        {
+            CompanyId = _companyA,
+            ProductId = product.Id,
+            SerialNumber = "SN-A-001",
+            Status = SerialStatus.InStock,
+            WarehouseId = warehouse.Id
+        };
+
+        asA.Serials.Add(serial);
+        await asA.SaveChangesAsync();
+
+        asA.SerialEvents.Add(new SerialEvent
+        {
+            CompanyId = _companyA,
+            SerialId = serial.Id,
+            Type = SerialEventType.Received,
+            Status = SerialStatus.InStock,
+            WarehouseId = warehouse.Id,
+            At = DateTimeOffset.UnixEpoch
+        });
+
+        asA.StockReservations.Add(new StockReservation
+        {
+            CompanyId = _companyA,
+            WarehouseId = warehouse.Id,
+            ProductId = product.Id,
+            Quantity = 2,
+            Status = ReservationStatus.Active,
+            ReferenceType = StockReferenceType.Invoice,
+            ReservedAt = DateTimeOffset.UnixEpoch
+        });
+
+        asA.StockAdjustments.Add(new StockAdjustment
+        {
+            CompanyId = _companyA,
+            Number = "ADJ-2026-00001",
+            WarehouseId = warehouse.Id,
+            BranchId = _branchOfA,
+            Reason = AdjustmentReason.Damaged,
+            Explanation = "Water damage",
+            AdjustedAt = DateTimeOffset.UnixEpoch,
+            Lines = [new StockAdjustmentLine { CompanyId = _companyA, ProductId = product.Id, Quantity = -1, UnitCost = 100m }]
+        });
+
+        asA.StockCounts.Add(new StockCount
+        {
+            CompanyId = _companyA,
+            Number = "CNT-2026-00001",
+            WarehouseId = warehouse.Id,
+            BranchId = _branchOfA,
+            Status = StockCountStatus.Counting,
+            StartedAt = DateTimeOffset.UnixEpoch,
+            Lines =
+            [
+                new StockCountLine
+                {
+                    CompanyId = _companyA,
+                    ProductId = product.Id,
+                    SystemQuantity = 10,
+                    CountedQuantity = 9,
+                    UnitCost = 100m
+                }
+            ]
+        });
+
+        asA.BarcodePrintJobs.Add(new BarcodePrintJob
+        {
+            CompanyId = _companyA,
+            SourceType = BarcodeSource.Product,
+            SourceId = product.Id,
+            LabelCount = 10,
+            PrintedAt = DateTimeOffset.UnixEpoch
+        });
+
+        await asA.SaveChangesAsync();
+
+        await using var asB = CreateContext(_companyB);
+
+        (await asB.StockBalances.AnyAsync()).Should().BeFalse("B must not see what A has on its shelves");
+        (await asB.StockMovements.AnyAsync()).Should().BeFalse("nor A's ledger — it is A's entire cost base");
+        (await asB.Serials.AnyAsync()).Should().BeFalse("nor which machines A holds");
+        (await asB.SerialEvents.AnyAsync()).Should().BeFalse("nor their history");
+        (await asB.StockReservations.AnyAsync()).Should().BeFalse("nor what A has promised its customers");
+        (await asB.StockAdjustments.AnyAsync()).Should().BeFalse("nor what A has written off");
+        (await asB.StockAdjustmentLines.AnyAsync()).Should().BeFalse("the lines are scoped too, not just the header");
+        (await asB.StockCounts.AnyAsync()).Should().BeFalse("nor A's counts");
+        (await asB.StockCountLines.AnyAsync()).Should().BeFalse("nor their lines");
+        (await asB.BarcodePrintJobs.AnyAsync()).Should().BeFalse("nor what A has labelled");
+
+        // Knowing the id is not enough. Ids leak through URLs, exports and screenshots; the row behind
+        // one must still be unreachable.
+        (await asB.StockBalances.FirstOrDefaultAsync(b => b.ProductId == product.Id)).Should().BeNull();
+        (await asB.Serials.FirstOrDefaultAsync(s => s.Id == serial.Id)).Should().BeNull();
+
+        // And B may reuse the serial number: a serial identifies one machine within one company's
+        // books, and B must not be told "that serial is taken" because an unrelated company used it.
+        var warehouseB = new Warehouse
+        {
+            CompanyId = _companyB,
+            BranchId = _branchOfB,
+            Name = "B Store",
+            Code = "B-STORE"
+        };
+
+        var productB = new Product
+        {
+            CompanyId = _companyB,
+            ItemCode = "B-INV",
+            Sku = "B-INV",
+            Name = "B's stock item",
+            Unit = "each",
+            TrackingMode = TrackingMode.Serial
+        };
+
+        asB.Warehouses.Add(warehouseB);
+        asB.Products.Add(productB);
+        await asB.SaveChangesAsync();
+
+        asB.Serials.Add(new Serial
+        {
+            CompanyId = _companyB,
+            ProductId = productB.Id,
+            SerialNumber = "SN-A-001",
+            Status = SerialStatus.InStock,
+            WarehouseId = warehouseB.Id
+        });
+
+        var act = async () => await asB.SaveChangesAsync();
+
+        await act.Should().NotThrowAsync("serial uniqueness is scoped to the company, not global");
     }
 
     [Fact]

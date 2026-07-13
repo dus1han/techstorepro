@@ -269,6 +269,87 @@ public class CreateBrandCommandHandler : IRequestHandler<CreateBrandCommand, Gui
     }
 }
 
+[RequiresPermission(FeatureCatalog.Brands, PermissionAction.Edit)]
+public record UpdateBrandCommand(Guid Id, string Name, bool IsActive) : IRequest;
+
+public class UpdateBrandCommandValidator : AbstractValidator<UpdateBrandCommand>
+{
+    public UpdateBrandCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.Name).NotEmpty().MaximumLength(200);
+    }
+}
+
+public class UpdateBrandCommandHandler : IRequestHandler<UpdateBrandCommand>
+{
+    private readonly IApplicationDbContext _db;
+
+    public UpdateBrandCommandHandler(IApplicationDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task Handle(UpdateBrandCommand request, CancellationToken cancellationToken)
+    {
+        var brand = await _db.Brands.FirstOrDefaultAsync(b => b.Id == request.Id, cancellationToken)
+            ?? throw new NotFoundException("Brand", request.Id);
+
+        var name = request.Name.Trim();
+
+        if (await _db.Brands.AnyAsync(b => b.Name == name && b.Id != request.Id, cancellationToken))
+        {
+            throw new ConflictException($"The brand '{name}' already exists.");
+        }
+
+        brand.Name = name;
+        brand.IsActive = request.IsActive;
+
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+}
+
+[RequiresPermission(FeatureCatalog.Brands, PermissionAction.Delete)]
+public record DeleteBrandCommand(Guid Id, string Reason) : IRequest;
+
+public class DeleteBrandCommandValidator : AbstractValidator<DeleteBrandCommand>
+{
+    public DeleteBrandCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.Reason).NotEmpty().MaximumLength(500);
+    }
+}
+
+public class DeleteBrandCommandHandler : IRequestHandler<DeleteBrandCommand>
+{
+    private readonly IApplicationDbContext _db;
+
+    public DeleteBrandCommandHandler(IApplicationDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task Handle(DeleteBrandCommand request, CancellationToken cancellationToken)
+    {
+        var brand = await _db.Brands.FirstOrDefaultAsync(b => b.Id == request.Id, cancellationToken)
+            ?? throw new NotFoundException("Brand", request.Id);
+
+        // Retiring a brand out from under live products would leave them branded by a row nothing can
+        // show — the product list would quietly lose a filter's worth of rows, exactly as with categories.
+        if (await _db.Products.AnyAsync(p => p.BrandId == request.Id, cancellationToken))
+        {
+            throw new ConflictException(
+                "This brand still has products under it. Rebrand them first, or retire the products.");
+        }
+
+        brand.DeletedReason = request.Reason.Trim();
+
+        _db.Brands.Remove(brand);
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+}
+
 // ================================================================================================
 // Tax rates (requirements §11 — effective-dated)
 // ================================================================================================
@@ -374,6 +455,180 @@ public class CreateTaxRateCommandHandler : IRequestHandler<CreateTaxRateCommand,
     }
 }
 
+/// <summary>
+/// Corrects a tax rate's <em>label</em> — not its percentage.
+///
+/// <b>The percent is deliberately not editable here.</b> A tax rate is effective-dated: an invoice
+/// raised in April was 5% and a July change to 9% must not restate it (General Rule 3, and the P2 test
+/// <c>Changing_the_rate_does_not_change_what_applied_in_the_past</c>). Editing the percent in place
+/// would rewrite what was in force in April, silently changing the tax on documents that have already
+/// been issued to customers and filed with the authority. Use <see cref="SupersedeTaxRateCommand"/>,
+/// which closes the old rate and opens a new one — so history stays true and the future gets the new
+/// number.
+/// </summary>
+[RequiresPermission(FeatureCatalog.TaxRates, PermissionAction.Edit)]
+public record UpdateTaxRateCommand(Guid Id, string Name, bool IsDefault, bool IsActive) : IRequest;
+
+public class UpdateTaxRateCommandValidator : AbstractValidator<UpdateTaxRateCommand>
+{
+    public UpdateTaxRateCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.Name).NotEmpty().MaximumLength(100);
+    }
+}
+
+public class UpdateTaxRateCommandHandler : IRequestHandler<UpdateTaxRateCommand>
+{
+    private readonly IApplicationDbContext _db;
+
+    public UpdateTaxRateCommandHandler(IApplicationDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task Handle(UpdateTaxRateCommand request, CancellationToken cancellationToken)
+    {
+        var rate = await _db.TaxRates.FirstOrDefaultAsync(t => t.Id == request.Id, cancellationToken)
+            ?? throw new NotFoundException("Tax rate", request.Id);
+
+        rate.Name = request.Name.Trim();
+        rate.IsActive = request.IsActive;
+
+        // Exactly one default, as on create: two would make "the rate for a product with none set"
+        // depend on row order.
+        if (request.IsDefault && !rate.IsDefault)
+        {
+            var existingDefaults = await _db.TaxRates
+                .Where(t => t.IsDefault && t.Id != request.Id)
+                .ToListAsync(cancellationToken);
+
+            foreach (var existing in existingDefaults)
+            {
+                existing.IsDefault = false;
+            }
+        }
+
+        rate.IsDefault = request.IsDefault;
+
+        rate.Validate();
+
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+}
+
+/// <summary>
+/// The tax went up. Closes the current rate at the moment the new one takes effect, and opens a
+/// successor — two rows, not one edited row, so April still says 5% and August says 9%.
+/// </summary>
+[RequiresPermission(FeatureCatalog.TaxRates, PermissionAction.Edit)]
+public record SupersedeTaxRateCommand(Guid Id, decimal Percent, DateTimeOffset? EffectiveFrom) : IRequest<Guid>;
+
+public class SupersedeTaxRateCommandValidator : AbstractValidator<SupersedeTaxRateCommand>
+{
+    public SupersedeTaxRateCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.Percent).InclusiveBetween(0, 100);
+    }
+}
+
+public class SupersedeTaxRateCommandHandler : IRequestHandler<SupersedeTaxRateCommand, Guid>
+{
+    private readonly IApplicationDbContext _db;
+    private readonly IDateTime _clock;
+
+    public SupersedeTaxRateCommandHandler(IApplicationDbContext db, IDateTime clock)
+    {
+        _db = db;
+        _clock = clock;
+    }
+
+    public async Task<Guid> Handle(SupersedeTaxRateCommand request, CancellationToken cancellationToken)
+    {
+        var current = await _db.TaxRates.FirstOrDefaultAsync(t => t.Id == request.Id, cancellationToken)
+            ?? throw new NotFoundException("Tax rate", request.Id);
+
+        var effectiveFrom = request.EffectiveFrom ?? _clock.UtcNow;
+
+        if (current.ValidTo is not null)
+        {
+            throw new ConflictException(
+                $"'{current.Name}' has already been superseded and is closed. Supersede the rate that "
+                + "is currently in force, or create a new one.");
+        }
+
+        if (effectiveFrom <= current.ValidFrom)
+        {
+            // The successor would begin before its predecessor did, and "what was the rate in April?"
+            // would have two answers.
+            throw new ConflictException(
+                "The new rate must take effect after the one it replaces began.");
+        }
+
+        var successor = new TaxRate
+        {
+            Name = current.Name,
+            Percent = request.Percent,
+            IsDefault = current.IsDefault,
+            ValidFrom = effectiveFrom,
+            ValidTo = null,
+            IsActive = true
+        };
+
+        successor.Validate();
+
+        // The old rate stops exactly when the new one starts: no gap in which a document could find no
+        // rate at all, and no overlap in which it could find two.
+        current.ValidTo = effectiveFrom;
+        current.IsDefault = false;
+
+        _db.TaxRates.Add(successor);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return successor.Id;
+    }
+}
+
+[RequiresPermission(FeatureCatalog.TaxRates, PermissionAction.Delete)]
+public record DeleteTaxRateCommand(Guid Id, string Reason) : IRequest;
+
+public class DeleteTaxRateCommandValidator : AbstractValidator<DeleteTaxRateCommand>
+{
+    public DeleteTaxRateCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.Reason).NotEmpty().MaximumLength(500);
+    }
+}
+
+public class DeleteTaxRateCommandHandler : IRequestHandler<DeleteTaxRateCommand>
+{
+    private readonly IApplicationDbContext _db;
+
+    public DeleteTaxRateCommandHandler(IApplicationDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task Handle(DeleteTaxRateCommand request, CancellationToken cancellationToken)
+    {
+        var rate = await _db.TaxRates.FirstOrDefaultAsync(t => t.Id == request.Id, cancellationToken)
+            ?? throw new NotFoundException("Tax rate", request.Id);
+
+        if (await _db.Products.AnyAsync(p => p.TaxRateId == request.Id, cancellationToken))
+        {
+            throw new ConflictException(
+                "This tax rate is still set on products. Move them to another rate first.");
+        }
+
+        rate.DeletedReason = request.Reason.Trim();
+
+        _db.TaxRates.Remove(rate);
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+}
+
 // ================================================================================================
 // Price tiers (requirements §31)
 // ================================================================================================
@@ -445,6 +700,124 @@ public class CreatePriceTierCommandHandler : IRequestHandler<CreatePriceTierComm
         await _db.SaveChangesAsync(cancellationToken);
 
         return tier.Id;
+    }
+}
+
+[RequiresPermission(FeatureCatalog.Pricing, PermissionAction.Edit)]
+public record UpdatePriceTierCommand(Guid Id, string Name, bool IsDefault, bool IsActive) : IRequest;
+
+public class UpdatePriceTierCommandValidator : AbstractValidator<UpdatePriceTierCommand>
+{
+    public UpdatePriceTierCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.Name).NotEmpty().MaximumLength(100);
+    }
+}
+
+public class UpdatePriceTierCommandHandler : IRequestHandler<UpdatePriceTierCommand>
+{
+    private readonly IApplicationDbContext _db;
+
+    public UpdatePriceTierCommandHandler(IApplicationDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task Handle(UpdatePriceTierCommand request, CancellationToken cancellationToken)
+    {
+        var tier = await _db.PriceTiers.FirstOrDefaultAsync(t => t.Id == request.Id, cancellationToken)
+            ?? throw new NotFoundException("Price tier", request.Id);
+
+        var name = request.Name.Trim();
+
+        if (await _db.PriceTiers.AnyAsync(t => t.Name == name && t.Id != request.Id, cancellationToken))
+        {
+            throw new ConflictException($"The price tier '{name}' already exists.");
+        }
+
+        // Exactly one default tier: it is what a customer with no tier of their own falls back to, and
+        // two of them would make that fallback depend on row order — the same customer could be quoted
+        // two different prices on two different days for no reason anyone could explain.
+        if (request.IsDefault && !tier.IsDefault)
+        {
+            var existingDefaults = await _db.PriceTiers
+                .Where(t => t.IsDefault && t.Id != request.Id)
+                .ToListAsync(cancellationToken);
+
+            foreach (var existing in existingDefaults)
+            {
+                existing.IsDefault = false;
+            }
+        }
+
+        if (!request.IsDefault && tier.IsDefault)
+        {
+            throw new ConflictException(
+                "This is the default price tier. Make another tier the default instead — a company with "
+                + "no default has no price for a customer who has not been given a tier.");
+        }
+
+        tier.Name = name;
+        tier.IsDefault = request.IsDefault;
+        tier.IsActive = request.IsActive;
+
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+}
+
+[RequiresPermission(FeatureCatalog.Pricing, PermissionAction.Delete)]
+public record DeletePriceTierCommand(Guid Id, string Reason) : IRequest;
+
+public class DeletePriceTierCommandValidator : AbstractValidator<DeletePriceTierCommand>
+{
+    public DeletePriceTierCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.Reason).NotEmpty().MaximumLength(500);
+    }
+}
+
+public class DeletePriceTierCommandHandler : IRequestHandler<DeletePriceTierCommand>
+{
+    private readonly IApplicationDbContext _db;
+
+    public DeletePriceTierCommandHandler(IApplicationDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task Handle(DeletePriceTierCommand request, CancellationToken cancellationToken)
+    {
+        var tier = await _db.PriceTiers.FirstOrDefaultAsync(t => t.Id == request.Id, cancellationToken)
+            ?? throw new NotFoundException("Price tier", request.Id);
+
+        if (tier.IsDefault)
+        {
+            throw new ConflictException(
+                "The default price tier cannot be retired: every customer without a tier of their own "
+                + "resolves through it. Make another tier the default first.");
+        }
+
+        // Retiring a tier that customers are still on would leave them with no tier, and the price
+        // resolver would silently fall back to the default — quietly re-pricing a wholesale customer
+        // at retail on their next order.
+        if (await _db.Customers.AnyAsync(c => c.PriceTierId == request.Id, cancellationToken))
+        {
+            throw new ConflictException(
+                "Customers are still on this price tier. Move them to another tier first, or they "
+                + "would silently be re-priced at the default.");
+        }
+
+        if (await _db.PriceLists.AnyAsync(l => l.PriceTierId == request.Id, cancellationToken))
+        {
+            throw new ConflictException("This tier still has price lists. Retire them first.");
+        }
+
+        tier.DeletedReason = request.Reason.Trim();
+
+        _db.PriceTiers.Remove(tier);
+        await _db.SaveChangesAsync(cancellationToken);
     }
 }
 
@@ -540,6 +913,97 @@ public class CreatePaymentMethodCommandHandler : IRequestHandler<CreatePaymentMe
         await _db.SaveChangesAsync(cancellationToken);
 
         return method.Id;
+    }
+}
+
+[RequiresPermission(FeatureCatalog.PaymentMethods, PermissionAction.Edit)]
+public record UpdatePaymentMethodCommand(
+    Guid Id,
+    string Name,
+    PaymentMethodKind Kind,
+    bool RequiresReference,
+    DateTimeOffset? ValidTo,
+    bool IsActive) : IRequest;
+
+public class UpdatePaymentMethodCommandValidator : AbstractValidator<UpdatePaymentMethodCommand>
+{
+    public UpdatePaymentMethodCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.Name).NotEmpty().MaximumLength(100);
+    }
+}
+
+public class UpdatePaymentMethodCommandHandler : IRequestHandler<UpdatePaymentMethodCommand>
+{
+    private readonly IApplicationDbContext _db;
+
+    public UpdatePaymentMethodCommandHandler(IApplicationDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task Handle(UpdatePaymentMethodCommand request, CancellationToken cancellationToken)
+    {
+        var method = await _db.PaymentMethods.FirstOrDefaultAsync(m => m.Id == request.Id, cancellationToken)
+            ?? throw new NotFoundException("Payment method", request.Id);
+
+        var name = request.Name.Trim();
+
+        if (await _db.PaymentMethods.AnyAsync(m => m.Name == name && m.Id != request.Id, cancellationToken))
+        {
+            throw new ConflictException($"The payment method '{name}' already exists.");
+        }
+
+        if (request.ValidTo is { } end && end <= method.ValidFrom)
+        {
+            throw new ConflictException("A payment method's validity must end after it begins.");
+        }
+
+        method.Name = name;
+        method.Kind = request.Kind;
+        method.RequiresReference = request.RequiresReference;
+        method.ValidTo = request.ValidTo;
+        method.IsActive = request.IsActive;
+
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+}
+
+[RequiresPermission(FeatureCatalog.PaymentMethods, PermissionAction.Delete)]
+public record DeletePaymentMethodCommand(Guid Id, string Reason) : IRequest;
+
+public class DeletePaymentMethodCommandValidator : AbstractValidator<DeletePaymentMethodCommand>
+{
+    public DeletePaymentMethodCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.Reason).NotEmpty().MaximumLength(500);
+    }
+}
+
+public class DeletePaymentMethodCommandHandler : IRequestHandler<DeletePaymentMethodCommand>
+{
+    private readonly IApplicationDbContext _db;
+
+    public DeletePaymentMethodCommandHandler(IApplicationDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task Handle(DeletePaymentMethodCommand request, CancellationToken cancellationToken)
+    {
+        var method = await _db.PaymentMethods.FirstOrDefaultAsync(m => m.Id == request.Id, cancellationToken)
+            ?? throw new NotFoundException("Payment method", request.Id);
+
+        // Payments (P5) will reference this. When they exist, retiring a method that has taken money
+        // must be refused here — a payment whose method has vanished cannot be reconciled against the
+        // bank statement. There is nothing to check against yet, and faking the check would be worse
+        // than leaving the note.
+        method.DeletedReason = request.Reason.Trim();
+
+        _db.PaymentMethods.Remove(method);
+        await _db.SaveChangesAsync(cancellationToken);
     }
 }
 
@@ -785,5 +1249,92 @@ public class CreateDiscountCommandHandler : IRequestHandler<CreateDiscountComman
         await _db.SaveChangesAsync(cancellationToken);
 
         return discount.Id;
+    }
+}
+
+[RequiresPermission(FeatureCatalog.Discounts, PermissionAction.Edit)]
+public record UpdateDiscountCommand(
+    Guid Id,
+    string Name,
+    DiscountMethod Method,
+    decimal Value,
+    decimal? MaxValue,
+    DateTimeOffset? ValidTo,
+    bool IsActive) : IRequest;
+
+public class UpdateDiscountCommandValidator : AbstractValidator<UpdateDiscountCommand>
+{
+    public UpdateDiscountCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.Name).NotEmpty().MaximumLength(200);
+        RuleFor(x => x.Value).GreaterThanOrEqualTo(0);
+    }
+}
+
+public class UpdateDiscountCommandHandler : IRequestHandler<UpdateDiscountCommand>
+{
+    private readonly IApplicationDbContext _db;
+
+    public UpdateDiscountCommandHandler(IApplicationDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task Handle(UpdateDiscountCommand request, CancellationToken cancellationToken)
+    {
+        var discount = await _db.Discounts.FirstOrDefaultAsync(d => d.Id == request.Id, cancellationToken)
+            ?? throw new NotFoundException("Discount", request.Id);
+
+        // What the discount applies to — the product, the customer — is deliberately not editable. A
+        // discount is a rule about a specific pairing; repointing it at a different customer would
+        // rewrite what was agreed with the first one. Retire it and raise the rule you actually mean.
+        discount.Name = request.Name.Trim();
+        discount.Method = request.Method;
+        discount.Value = request.Value;
+        discount.MaxValue = request.MaxValue;
+        discount.ValidTo = request.ValidTo;
+        discount.IsActive = request.IsActive;
+
+        // The entity's own rules: the approval ceiling cannot sit below the discount (every use would
+        // stall in approval), and a fixed discount cannot exceed the line it is taken off.
+        discount.Validate();
+
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+}
+
+[RequiresPermission(FeatureCatalog.Discounts, PermissionAction.Delete)]
+public record DeleteDiscountCommand(Guid Id, string Reason) : IRequest;
+
+public class DeleteDiscountCommandValidator : AbstractValidator<DeleteDiscountCommand>
+{
+    public DeleteDiscountCommandValidator()
+    {
+        RuleFor(x => x.Id).NotEmpty();
+        RuleFor(x => x.Reason).NotEmpty().MaximumLength(500);
+    }
+}
+
+public class DeleteDiscountCommandHandler : IRequestHandler<DeleteDiscountCommand>
+{
+    private readonly IApplicationDbContext _db;
+
+    public DeleteDiscountCommandHandler(IApplicationDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task Handle(DeleteDiscountCommand request, CancellationToken cancellationToken)
+    {
+        var discount = await _db.Discounts.FirstOrDefaultAsync(d => d.Id == request.Id, cancellationToken)
+            ?? throw new NotFoundException("Discount", request.Id);
+
+        // Soft-deleted, so the discount that was applied to a past order can still be explained. The
+        // rule stops applying from now on; it does not stop having applied.
+        discount.DeletedReason = request.Reason.Trim();
+
+        _db.Discounts.Remove(discount);
+        await _db.SaveChangesAsync(cancellationToken);
     }
 }

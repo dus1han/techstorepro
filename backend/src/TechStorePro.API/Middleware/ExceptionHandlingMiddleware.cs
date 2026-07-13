@@ -1,5 +1,6 @@
 using TechStorePro.Application.Common.Exceptions;
 using TechStorePro.Domain.Exceptions;
+using TechStorePro.Domain.Inventory;
 using Microsoft.AspNetCore.Mvc;
 
 namespace TechStorePro.API.Middleware;
@@ -44,6 +45,22 @@ public class ExceptionHandlingMiddleware
                     Status = StatusCodes.Status400BadRequest,
                     Title = "One or more validation errors occurred."
                 };
+                break;
+
+            // Before DomainException, which it derives from — the switch takes the first match, and a
+            // "not enough stock" reported as 400 would tell the client to fix its request when there is
+            // nothing wrong with it. The request was valid; the shelf disagrees (api-design.md §4).
+            case InsufficientStockException stock:
+                problem = new ProblemDetails
+                {
+                    Status = StatusCodes.Status422UnprocessableEntity,
+                    Title = "Not enough stock.",
+                    Detail = stock.Message
+                };
+                problem.Extensions["productId"] = stock.ProductId;
+                problem.Extensions["warehouseId"] = stock.WarehouseId;
+                problem.Extensions["requested"] = stock.Requested;
+                problem.Extensions["available"] = stock.Available;
                 break;
 
             case DomainException domain:

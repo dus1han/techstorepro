@@ -7,6 +7,7 @@ using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Common;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Identity;
+using TechStorePro.Domain.Inventory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -76,6 +77,20 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<PaymentMethod> PaymentMethods => Set<PaymentMethod>();
     public DbSet<Currency> Currencies => Set<Currency>();
     public DbSet<FxRate> FxRates => Set<FxRate>();
+
+    // --- Inventory (P3) ----------------------------------------------------------------------
+    public DbSet<StockMovement> StockMovements => Set<StockMovement>();
+    public DbSet<StockBalance> StockBalances => Set<StockBalance>();
+    public DbSet<Serial> Serials => Set<Serial>();
+    public DbSet<SerialEvent> SerialEvents => Set<SerialEvent>();
+    public DbSet<StockReservation> StockReservations => Set<StockReservation>();
+    public DbSet<StockTransfer> StockTransfers => Set<StockTransfer>();
+    public DbSet<StockTransferLine> StockTransferLines => Set<StockTransferLine>();
+    public DbSet<StockAdjustment> StockAdjustments => Set<StockAdjustment>();
+    public DbSet<StockAdjustmentLine> StockAdjustmentLines => Set<StockAdjustmentLine>();
+    public DbSet<StockCount> StockCounts => Set<StockCount>();
+    public DbSet<StockCountLine> StockCountLines => Set<StockCountLine>();
+    public DbSet<BarcodePrintJob> BarcodePrintJobs => Set<BarcodePrintJob>();
 
     // Business module DbSets are added here as modules are built.
 
@@ -245,9 +260,15 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             // The audit log does not audit itself, and neither does the noise: a login row and a
             // rotated refresh token are already their own records.
             //
+            // The same goes for the stock ledger. A stock movement and a serial event are append-only
+            // records of who did what, when and why — auditing them would write a second, identical
+            // history at twice the cost, and a busy shop posts thousands of movements a day. The
+            // balance is excluded because it is a cache: its audit trail is the movements it sums.
+            //
             // LoginHistory is fully qualified because the DbSet property of the same name would
             // otherwise shadow the type in this pattern.
-            if (entry.Entity is AuditLog or Domain.Identity.LoginHistory or RefreshToken)
+            if (entry.Entity is AuditLog or Domain.Identity.LoginHistory or RefreshToken
+                or StockMovement or StockBalance or SerialEvent)
             {
                 continue;
             }

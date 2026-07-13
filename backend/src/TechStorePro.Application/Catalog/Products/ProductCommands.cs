@@ -5,6 +5,7 @@ using TechStorePro.Application.Common.Security;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Exceptions;
 using TechStorePro.Domain.Identity;
+using TechStorePro.Domain.Inventory;
 using FluentValidation;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -460,9 +461,46 @@ public class DeleteProductCommandHandler : IRequestHandler<DeleteProductCommand>
         var product = await _db.Products.FirstOrDefaultAsync(p => p.Id == request.Id, cancellationToken)
             ?? throw new NotFoundException("Product", request.Id);
 
-        // From P3 this must also refuse to retire a product that still has stock on hand — you cannot
-        // delete something the shelf disagrees about. The stock ledger does not exist yet, so the
-        // check cannot be written honestly; it is listed against P3 rather than faked here.
+        // You cannot retire something the shelf disagrees about. A soft-deleted product with units still
+        // on hand vanishes from every screen while its stock keeps counting towards the valuation — the
+        // stock report and the product list would tell two different stories about the same warehouse,
+        // and only one of them would be visible.
+        //
+        // The stock has to go somewhere first: sell it, transfer it, or write it off with a reason. All
+        // three leave a ledger entry; deleting the product would leave nothing.
+        var onHand = await _db.StockBalances
+            .Where(b => b.ProductId == product.Id && b.Quantity != 0)
+            .Select(b => new { b.Warehouse.Name, b.Quantity })
+            .ToListAsync(cancellationToken);
+
+        if (onHand.Count > 0)
+        {
+            var where = string.Join(", ", onHand.Select(b => $"{b.Quantity:0.####} in {b.Name}"));
+
+            throw new ConflictException(
+                $"'{product.Name}' still has stock on hand ({where}). "
+                + "Sell it, transfer it, or write it off before retiring the product.");
+        }
+
+        // Serials are separate from the balance and can outlive it: a unit in transit belongs to no
+        // warehouse, so it is in no balance row, and a reserved unit is on the shelf but promised. Both
+        // would be orphaned by retiring the product underneath them.
+        var liveSerials = await _db.Serials
+            .CountAsync(
+                s => s.ProductId == product.Id
+                    && (s.Status == SerialStatus.InStock
+                        || s.Status == SerialStatus.Reserved
+                        || s.Status == SerialStatus.InTransit
+                        || s.Status == SerialStatus.InRepair),
+                cancellationToken);
+
+        if (liveSerials > 0)
+        {
+            throw new ConflictException(
+                $"'{product.Name}' has {liveSerials} serial-tracked unit(s) still in stock, reserved, "
+                + "in transit or in repair. Dispose of them before retiring the product.");
+        }
+
         product.DeletedReason = request.Reason.Trim();
 
         _db.Products.Remove(product);

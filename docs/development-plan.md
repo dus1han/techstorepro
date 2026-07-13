@@ -1,6 +1,6 @@
 # Development plan
 
-> Status: **P0, P1 and P2 complete. CI is running. P3 (inventory) is next and unblocked.**
+> Status: **P0–P3 complete. CI is running. P4 (purchasing) is next but blocked on Q2 (landed-cost basis).**
 >
 > Phases are numbered P0–P9 and match [architecture.md §6](architecture.md). The earlier M0–M8
 > milestone numbering is gone: it mapped almost one-to-one, and keeping two schemes alive only
@@ -108,17 +108,44 @@ cannot see A's products, customers or suppliers, gets a 404 fetching A's product
 **can reuse the same SKU** — uniqueness is scoped per company, not global. A retired product frees
 its SKU, so a mistyped code is not held hostage forever by a soft-deleted row.
 
-### P3 — Inventory (the spine) ← **next, unblocked**
+### P3 — Inventory (the spine) ✅ done
 
-Stock ledger (append-only movements), balances per **warehouse**, serial lifecycle, barcodes/QR and
-label printing, reservations, transfers, adjustments, stock counts, historical stock,
-**weighted-average costing**.
+**Delivered (12 new tables, 42 in total):**
 
-- ✅ Unblocked: costing is **weighted average** (§45 D1); the warehouse model is settled (D2).
-- The stock ledger is the highest-risk code in the system. Every movement is written in the **same
-  transaction** as the balance it changes, with the balance row locked; a nightly job recomputes
-  balances from movements and must agree to the cent.
-- `available = quantity − reserved_quantity`. That subtraction is what "prevent overselling" means.
+- **The stock ledger.** `IStockLedger` is the single door: nothing else in the system may write
+  `stock_movements`, `stock_balances` or a serial's status. Every method **requires an ambient
+  transaction and throws without one** — a stock movement is never the only thing a business
+  operation does, and a ledger that quietly committed on its own would leave stock moved and the
+  document that moved it rolled back.
+- **The lock is the design.** The balance row is materialised and locked
+  (`INSERT … ON CONFLICT DO NOTHING`, then `SELECT … FOR UPDATE`) before it is read, and the weighted
+  average is recomputed *inside* that lock. The upsert is not redundant: `FOR UPDATE` locks nothing
+  when the row does not exist yet, and two concurrent first-receipts would both insert.
+- **Serial lifecycle** — a state machine, not a status column. `Scrapped` and `ReturnedToSupplier` are
+  terminal; a sold unit never silently returns to the shelf. This is what stops the same laptop being
+  sold twice, which quantities alone cannot.
+- **Reservations** (§20), **transfers** (two movements, so in-transit stock belongs to neither end),
+  **adjustments** (post immediately; mandatory reason), **stock counts** (§21: system quantity
+  snapshotted at scan time, approval a separate permission because it authorises a write-off),
+  **historical stock** (§19), **valuation**, and **barcode/QR label printing** to PDF (§17).
+- **`available = quantity − reserved_quantity`.** That subtraction is what "prevent overselling" means,
+  and it is enforced under the lock.
+
+**The cache proves itself.** `stock_balances` is a cache of `stock_movements`, so `/inventory/balance-audit`
+recomputes it from the ledger — and `InventoryMaintenanceService` runs **the same audit** nightly, per
+company, alongside a 15-minute sweep of expired reservations (a forgotten quote would otherwise hold
+the last unit off the shelf forever). The audit compares **cost as well as quantity**: a balance whose
+units are right and whose average is wrong looks healthy while every sale from that warehouse books
+the wrong COGS. It reports and never repairs — a disagreement means something wrote stock outside
+`IStockLedger`, and overwriting the evidence would destroy the only trace of it.
+
+**Tests: 142 green** (110 domain + 32 integration), up from 47. The ledger's guarantees are all claims
+about what the *database* does — `FOR UPDATE`, `ON CONFLICT`, real transactions — so they are tested
+against a real PostgreSQL and not an in-memory provider that would pass while the real thing oversold
+the last laptop. The suite proves overselling is refused, that a reservation cannot be double-promised,
+that the same serial cannot be sold twice, that a rolled-back transaction leaves no stock, **and that
+the audit itself fails when a balance is corrupted behind the ledger's back** — in quantity *or* in
+cost. The cross-tenant gate grew to cover all ten new tenant-scoped tables.
 
 ### P4 — Purchasing and imports
 
@@ -197,10 +224,12 @@ Recorded rather than hidden. Each has an owning phase; none is a reason to stop.
 | No rate limiting on `/auth/*` | Lockout blunts online brute force but not a distributed one. | **P9** |
 | Migrations applied by the API at start-up (Development) | Fine for one developer; two production instances starting together would race. | Before the first real deploy: a separate deploy step. |
 | Postgres RLS not enabled | The EF query filter is enforced centrally and proven by tests. RLS would stop even a raw SQL query that bypassed it. | Before production (database-design.md §1). |
-| **Frontend types still hand-written** | `types/identity.ts` and `types/catalog.ts` mirror the API by hand. A renamed API field compiles fine on the client and fails at runtime. | **P3** — generate from `/openapi/v1.json` so drift becomes a build error. Slipped from P2. |
-| Product delete does not check stock | Retiring a product that still has units on the shelf should be refused. The stock ledger does not exist yet, so the check cannot be written honestly — it is left undone rather than faked. | **P3**, with the ledger. |
-| Update/delete missing on some reference data | Brands, tax rates, price tiers, payment methods and discounts can be created and listed, but not yet edited or retired. Enough to build P3 on; not enough to run a shop. | **P3**, alongside inventory. |
-| Repository not under version control | CI exists as a workflow file, but nothing runs it: there is no git repository and no remote. | **Immediately.** |
+| **Frontend types still hand-written** | `types/*.ts` mirror the API by hand. A renamed API field compiles fine on the client and fails at runtime. **P3 added the `codegen` script** that generates them from `/openapi/v1.json`; the hand-written types are still what the app imports, so the drift is now *checkable* but not yet *impossible*. | **P4** — migrate the imports over, then delete the hand-written files. |
+| ~~Product delete does not check stock~~ | **Closed in P3.** Retiring a product now fails if it has stock on hand or live serials, and names the warehouses. | ✅ |
+| ~~Update/delete missing on some reference data~~ | **Closed in P3.** Brands, tax rates, price tiers, payment methods and discounts can now be edited and retired. A tax rate's **percent** is deliberately not editable — changing it in place would restate the tax on invoices already issued — so `POST /tax-rates/{id}/supersede` closes the old rate and opens its successor. | ✅ |
+| Migrations applied by the API at start-up (Development) | Two production instances starting together would race. The maintenance job is safe here (it only reads, and its writes are per-company and transactional), but the schema is not. | Before the first real deploy: a separate deploy step. |
+| No idempotency keys yet | `api-design.md §5` promises `Idempotency-Key` on state-changing endpoints. Nothing implements it. A double-clicked adjustment posts twice — and unlike a duplicate invoice, a duplicate write-off is invisible until the next count. | **P4**, with goods receipts. |
+| ~~Repository not under version control~~ | **Closed.** The repository is on `origin` (GitHub) and P3 is pushed. The CI workflow's seven gates were verified locally before the push, so the pipeline is green the day it first runs rather than a wall of red everyone learns to ignore. | ✅ |
 
 ## Engineering practices
 
@@ -234,14 +263,29 @@ Port 5433, not 5432: a locally-installed PostgreSQL commonly owns 5432, and two 
 over the port fails confusingly — the app connects successfully to the *wrong* database and reports
 an authentication error.
 
+### Configuration added in P3
+
+```jsonc
+"Inventory": {
+  "Maintenance": {
+    "Enabled": true,             // off ⇒ reservations are never swept and balances are never proven
+    "SweepInterval": "00:15:00", // expired reservations; not nightly — a quote that expired at 09:00
+                                 // must not hold the last unit off the shelf until 02:00 tomorrow
+    "ReconcileAtUtcHour": 2      // the balance audit reads the whole ledger; not while the shop trades
+  }
+}
+```
+
+Turning `Enabled` off is a supported choice (a second instance should not run the job twice), and the
+service logs a warning at start-up saying exactly what stops happening if you do.
+
 ## Immediate next steps
 
-1. **Initialise git and push.** The CI workflow exists and its gates are verified, but nothing runs
-   it until there is a repository and a remote. This is the cheapest item on the list and the one
-   that protects everything else.
-2. **Answer Q2 (landed-cost basis)** with worked examples from the business. It blocks P4, and with
-   weighted-average costing an error there contaminates the moving average of *all* stock of a
-   product, not only the imported units.
-3. **Start P3 — inventory.** The stock ledger is the highest-risk code in the system and the spine
-   everything else hangs off. Both of its blockers are resolved: weighted-average costing (§45 D1)
-   and the branch-owned-or-shared warehouse model (D2).
+1. **Answer Q2 (landed-cost basis)** with worked examples from the business — by value, by weight, or
+   by quantity? It blocks P4, and now that the ledger is real the stakes are concrete: the landed cost
+   is what `ApplyInbound` feeds into the moving average, so an error there does not just misprice the
+   imported units — it **spreads to all existing stock of that product** and never washes out.
+2. **Watch the first CI run.** All seven gates pass locally; the pipeline has never actually executed.
+3. **Start P4 — purchasing and imports**, once Q2 is answered. The GRN is what finally calls
+   `IStockLedger.PostAsync` with a real supplier cost; today the only things that move stock are
+   adjustments, transfers and counts.

@@ -2297,6 +2297,1144 @@ namespace TechStorePro.Infrastructure.Persistence.Migrations
                     b.ToTable("warehouses", "techstorepro");
                 });
 
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.BarcodePrintJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<bool>("IncludePrice")
+                        .HasColumnType("boolean")
+                        .HasColumnName("include_price");
+
+                    b.Property<bool>("IncludeProductName")
+                        .HasColumnType("boolean")
+                        .HasColumnName("include_product_name");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<int>("LabelCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("label_count");
+
+                    b.Property<DateTimeOffset>("PrintedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("printed_at");
+
+                    b.Property<Guid?>("SourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_id");
+
+                    b.Property<short>("SourceType")
+                        .HasColumnType("smallint")
+                        .HasColumnName("source_type");
+
+                    b.Property<short>("Symbology")
+                        .HasColumnType("smallint")
+                        .HasColumnName("symbology");
+
+                    b.Property<short>("Template")
+                        .HasColumnType("smallint")
+                        .HasColumnName("template");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_barcode_print_jobs");
+
+                    b.HasIndex("CompanyId", "SourceType", "SourceId")
+                        .HasDatabaseName("ix_barcode_print_jobs_company_id_source_type_source_id");
+
+                    b.ToTable("barcode_print_jobs", "techstorepro");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.Serial", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<Guid?>("GoodsReceiptLineId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("goods_receipt_line_id");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<decimal>("PurchaseCost")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("purchase_cost");
+
+                    b.Property<string>("SerialNumber")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("serial_number");
+
+                    b.Property<Guid?>("SoldInvoiceLineId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("sold_invoice_line_id");
+
+                    b.Property<short>("Status")
+                        .HasColumnType("smallint")
+                        .HasColumnName("status");
+
+                    b.Property<Guid?>("SupplierId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("supplier_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<Guid?>("WarehouseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("warehouse_id");
+
+                    b.Property<DateTimeOffset?>("WarrantyUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("warranty_until");
+
+                    b.HasKey("Id")
+                        .HasName("pk_serials");
+
+                    b.HasIndex("ProductId")
+                        .HasDatabaseName("ix_serials_product_id");
+
+                    b.HasIndex("SupplierId")
+                        .HasDatabaseName("ix_serials_supplier_id");
+
+                    b.HasIndex("WarehouseId")
+                        .HasDatabaseName("ix_serials_warehouse_id");
+
+                    b.HasIndex("CompanyId", "SerialNumber")
+                        .IsUnique()
+                        .HasDatabaseName("ix_serials_company_id_serial_number");
+
+                    b.HasIndex("CompanyId", "ProductId", "Status")
+                        .HasDatabaseName("ix_serials_company_id_product_id_status");
+
+                    b.HasIndex("CompanyId", "WarehouseId", "Status")
+                        .HasDatabaseName("ix_serials_company_id_warehouse_id_status");
+
+                    b.ToTable("serials", "techstorepro");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.SerialEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("At")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("at");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("notes");
+
+                    b.Property<Guid?>("ReferenceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reference_id");
+
+                    b.Property<string>("ReferenceNumber")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("reference_number");
+
+                    b.Property<short?>("ReferenceType")
+                        .HasColumnType("smallint")
+                        .HasColumnName("reference_type");
+
+                    b.Property<Guid>("SerialId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("serial_id");
+
+                    b.Property<short>("Status")
+                        .HasColumnType("smallint")
+                        .HasColumnName("status");
+
+                    b.Property<short>("Type")
+                        .HasColumnType("smallint")
+                        .HasColumnName("type");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<Guid?>("WarehouseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("warehouse_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_serial_events");
+
+                    b.HasIndex("SerialId")
+                        .HasDatabaseName("ix_serial_events_serial_id");
+
+                    b.HasIndex("CompanyId", "SerialId", "At")
+                        .HasDatabaseName("ix_serial_events_company_id_serial_id_at");
+
+                    b.ToTable("serial_events", "techstorepro");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockAdjustment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("AdjustedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("adjusted_at");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("branch_id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<string>("Explanation")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("explanation");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Number")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("number");
+
+                    b.Property<short>("Reason")
+                        .HasColumnType("smallint")
+                        .HasColumnName("reason");
+
+                    b.Property<Guid?>("StockCountId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("stock_count_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<Guid>("WarehouseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("warehouse_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_stock_adjustments");
+
+                    b.HasIndex("BranchId")
+                        .HasDatabaseName("ix_stock_adjustments_branch_id");
+
+                    b.HasIndex("WarehouseId")
+                        .HasDatabaseName("ix_stock_adjustments_warehouse_id");
+
+                    b.HasIndex("CompanyId", "Number")
+                        .IsUnique()
+                        .HasDatabaseName("ix_stock_adjustments_company_id_number");
+
+                    b.HasIndex("CompanyId", "Reason", "AdjustedAt")
+                        .HasDatabaseName("ix_stock_adjustments_company_id_reason_adjusted_at");
+
+                    b.ToTable("stock_adjustments", "techstorepro");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockAdjustmentLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("notes");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<decimal>("Quantity")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("quantity");
+
+                    b.Property<Guid?>("SerialId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("serial_id");
+
+                    b.Property<Guid>("StockAdjustmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("stock_adjustment_id");
+
+                    b.Property<decimal>("UnitCost")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("unit_cost");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_stock_adjustment_lines");
+
+                    b.HasIndex("ProductId")
+                        .HasDatabaseName("ix_stock_adjustment_lines_product_id");
+
+                    b.HasIndex("SerialId")
+                        .HasDatabaseName("ix_stock_adjustment_lines_serial_id");
+
+                    b.HasIndex("StockAdjustmentId")
+                        .HasDatabaseName("ix_stock_adjustment_lines_stock_adjustment_id");
+
+                    b.ToTable("stock_adjustment_lines", "techstorepro");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockBalance", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal>("AverageCost")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("average_cost");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<decimal>("Quantity")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("quantity");
+
+                    b.Property<decimal>("ReservedQuantity")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("reserved_quantity");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<Guid>("WarehouseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("warehouse_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_stock_balances");
+
+                    b.HasIndex("ProductId")
+                        .HasDatabaseName("ix_stock_balances_product_id");
+
+                    b.HasIndex("WarehouseId")
+                        .HasDatabaseName("ix_stock_balances_warehouse_id");
+
+                    b.HasIndex("CompanyId", "ProductId")
+                        .HasDatabaseName("ix_stock_balances_company_id_product_id");
+
+                    b.HasIndex("CompanyId", "WarehouseId", "ProductId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_stock_balances_company_id_warehouse_id_product_id");
+
+                    b.ToTable("stock_balances", "techstorepro");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockCount", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset?>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("approved_at");
+
+                    b.Property<Guid?>("ApprovedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("approved_by");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("branch_id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset?>("CountedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("counted_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("notes");
+
+                    b.Property<string>("Number")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("number");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<short>("Status")
+                        .HasColumnType("smallint")
+                        .HasColumnName("status");
+
+                    b.Property<Guid?>("StockAdjustmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("stock_adjustment_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<Guid>("WarehouseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("warehouse_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_stock_counts");
+
+                    b.HasIndex("BranchId")
+                        .HasDatabaseName("ix_stock_counts_branch_id");
+
+                    b.HasIndex("WarehouseId")
+                        .HasDatabaseName("ix_stock_counts_warehouse_id");
+
+                    b.HasIndex("CompanyId", "Number")
+                        .IsUnique()
+                        .HasDatabaseName("ix_stock_counts_company_id_number");
+
+                    b.HasIndex("CompanyId", "WarehouseId", "Status")
+                        .HasDatabaseName("ix_stock_counts_company_id_warehouse_id_status");
+
+                    b.ToTable("stock_counts", "techstorepro");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockCountLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<decimal>("CountedQuantity")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("counted_quantity");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("notes");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<Guid?>("SerialId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("serial_id");
+
+                    b.Property<Guid>("StockCountId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("stock_count_id");
+
+                    b.Property<decimal>("SystemQuantity")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("system_quantity");
+
+                    b.Property<decimal>("UnitCost")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("unit_cost");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_stock_count_lines");
+
+                    b.HasIndex("ProductId")
+                        .HasDatabaseName("ix_stock_count_lines_product_id");
+
+                    b.HasIndex("SerialId")
+                        .HasDatabaseName("ix_stock_count_lines_serial_id");
+
+                    b.HasIndex("StockCountId", "ProductId", "SerialId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_stock_count_lines_stock_count_id_product_id_serial_id")
+                        .HasFilter("is_deleted = false");
+
+                    b.ToTable("stock_count_lines", "techstorepro");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockMovement", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal>("AverageCostAfter")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("average_cost_after");
+
+                    b.Property<decimal>("BalanceAfter")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("balance_after");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("branch_id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("notes");
+
+                    b.Property<DateTimeOffset>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<decimal>("Quantity")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("quantity");
+
+                    b.Property<Guid?>("ReferenceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reference_id");
+
+                    b.Property<string>("ReferenceNumber")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("reference_number");
+
+                    b.Property<short>("ReferenceType")
+                        .HasColumnType("smallint")
+                        .HasColumnName("reference_type");
+
+                    b.Property<Guid?>("SerialId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("serial_id");
+
+                    b.Property<short>("Type")
+                        .HasColumnType("smallint")
+                        .HasColumnName("type");
+
+                    b.Property<decimal>("UnitCost")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("unit_cost");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<Guid>("WarehouseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("warehouse_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_stock_movements");
+
+                    b.HasIndex("BranchId")
+                        .HasDatabaseName("ix_stock_movements_branch_id");
+
+                    b.HasIndex("ProductId")
+                        .HasDatabaseName("ix_stock_movements_product_id");
+
+                    b.HasIndex("SerialId")
+                        .HasDatabaseName("ix_stock_movements_serial_id");
+
+                    b.HasIndex("WarehouseId")
+                        .HasDatabaseName("ix_stock_movements_warehouse_id");
+
+                    b.HasIndex("CompanyId", "SerialId")
+                        .HasDatabaseName("ix_stock_movements_company_id_serial_id");
+
+                    b.HasIndex("CompanyId", "ProductId", "OccurredAt")
+                        .IsDescending(false, false, true)
+                        .HasDatabaseName("ix_stock_movements_company_id_product_id_occurred_at");
+
+                    b.HasIndex("CompanyId", "ReferenceType", "ReferenceId")
+                        .HasDatabaseName("ix_stock_movements_company_id_reference_type_reference_id");
+
+                    b.HasIndex("CompanyId", "WarehouseId", "ProductId", "OccurredAt")
+                        .IsDescending(false, false, false, true)
+                        .HasDatabaseName("ix_stock_movements_company_id_warehouse_id_product_id_occurred~");
+
+                    b.ToTable("stock_movements", "techstorepro");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockReservation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<DateTimeOffset?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<decimal>("FulfilledQuantity")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("fulfilled_quantity");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("notes");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<decimal>("Quantity")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("quantity");
+
+                    b.Property<Guid?>("ReferenceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reference_id");
+
+                    b.Property<string>("ReferenceNumber")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("reference_number");
+
+                    b.Property<short>("ReferenceType")
+                        .HasColumnType("smallint")
+                        .HasColumnName("reference_type");
+
+                    b.Property<DateTimeOffset?>("ReleasedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("released_at");
+
+                    b.Property<DateTimeOffset>("ReservedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reserved_at");
+
+                    b.Property<Guid?>("SerialId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("serial_id");
+
+                    b.Property<short>("Status")
+                        .HasColumnType("smallint")
+                        .HasColumnName("status");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<Guid>("WarehouseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("warehouse_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_stock_reservations");
+
+                    b.HasIndex("ProductId")
+                        .HasDatabaseName("ix_stock_reservations_product_id");
+
+                    b.HasIndex("SerialId")
+                        .HasDatabaseName("ix_stock_reservations_serial_id");
+
+                    b.HasIndex("WarehouseId")
+                        .HasDatabaseName("ix_stock_reservations_warehouse_id");
+
+                    b.HasIndex("CompanyId", "Status", "ExpiresAt")
+                        .HasDatabaseName("ix_stock_reservations_company_id_status_expires_at");
+
+                    b.HasIndex("CompanyId", "WarehouseId", "ProductId", "Status")
+                        .HasDatabaseName("ix_stock_reservations_company_id_warehouse_id_product_id_status");
+
+                    b.ToTable("stock_reservations", "techstorepro");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockTransfer", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("branch_id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<Guid>("FromWarehouseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("from_warehouse_id");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("notes");
+
+                    b.Property<string>("Number")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("number");
+
+                    b.Property<DateTimeOffset?>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<Guid?>("ReceivedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("received_by");
+
+                    b.Property<DateTimeOffset?>("ShippedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("shipped_at");
+
+                    b.Property<Guid?>("ShippedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("shipped_by");
+
+                    b.Property<short>("Status")
+                        .HasColumnType("smallint")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("ToWarehouseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("to_warehouse_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_stock_transfers");
+
+                    b.HasIndex("BranchId")
+                        .HasDatabaseName("ix_stock_transfers_branch_id");
+
+                    b.HasIndex("FromWarehouseId")
+                        .HasDatabaseName("ix_stock_transfers_from_warehouse_id");
+
+                    b.HasIndex("ToWarehouseId")
+                        .HasDatabaseName("ix_stock_transfers_to_warehouse_id");
+
+                    b.HasIndex("CompanyId", "Number")
+                        .IsUnique()
+                        .HasDatabaseName("ix_stock_transfers_company_id_number");
+
+                    b.HasIndex("CompanyId", "Status")
+                        .HasDatabaseName("ix_stock_transfers_company_id_status");
+
+                    b.ToTable("stock_transfers", "techstorepro");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockTransferLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("product_id");
+
+                    b.Property<decimal>("Quantity")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("quantity");
+
+                    b.Property<decimal>("ReceivedQuantity")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("received_quantity");
+
+                    b.Property<Guid?>("SerialId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("serial_id");
+
+                    b.Property<Guid>("StockTransferId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("stock_transfer_id");
+
+                    b.Property<decimal>("UnitCost")
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("unit_cost");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_stock_transfer_lines");
+
+                    b.HasIndex("ProductId")
+                        .HasDatabaseName("ix_stock_transfer_lines_product_id");
+
+                    b.HasIndex("SerialId")
+                        .HasDatabaseName("ix_stock_transfer_lines_serial_id");
+
+                    b.HasIndex("StockTransferId")
+                        .HasDatabaseName("ix_stock_transfer_lines_stock_transfer_id");
+
+                    b.ToTable("stock_transfer_lines", "techstorepro");
+                });
+
             modelBuilder.Entity("TechStorePro.Domain.Catalog.Customer", b =>
                 {
                     b.HasOne("TechStorePro.Domain.Catalog.PriceTier", "PriceTier")
@@ -2568,6 +3706,293 @@ namespace TechStorePro.Infrastructure.Persistence.Migrations
                     b.Navigation("Branch");
                 });
 
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.Serial", b =>
+                {
+                    b.HasOne("TechStorePro.Domain.Catalog.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_serials_products_product_id");
+
+                    b.HasOne("TechStorePro.Domain.Catalog.Supplier", "Supplier")
+                        .WithMany()
+                        .HasForeignKey("SupplierId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_serials_suppliers_supplier_id");
+
+                    b.HasOne("TechStorePro.Domain.Identity.Warehouse", "Warehouse")
+                        .WithMany()
+                        .HasForeignKey("WarehouseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_serials_warehouses_warehouse_id");
+
+                    b.Navigation("Product");
+
+                    b.Navigation("Supplier");
+
+                    b.Navigation("Warehouse");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.SerialEvent", b =>
+                {
+                    b.HasOne("TechStorePro.Domain.Inventory.Serial", "Serial")
+                        .WithMany("Events")
+                        .HasForeignKey("SerialId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_serial_events_serials_serial_id");
+
+                    b.Navigation("Serial");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockAdjustment", b =>
+                {
+                    b.HasOne("TechStorePro.Domain.Identity.Branch", "Branch")
+                        .WithMany()
+                        .HasForeignKey("BranchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_adjustments_branches_branch_id");
+
+                    b.HasOne("TechStorePro.Domain.Identity.Warehouse", "Warehouse")
+                        .WithMany()
+                        .HasForeignKey("WarehouseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_adjustments_warehouses_warehouse_id");
+
+                    b.Navigation("Branch");
+
+                    b.Navigation("Warehouse");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockAdjustmentLine", b =>
+                {
+                    b.HasOne("TechStorePro.Domain.Catalog.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_adjustment_lines_products_product_id");
+
+                    b.HasOne("TechStorePro.Domain.Inventory.Serial", "Serial")
+                        .WithMany()
+                        .HasForeignKey("SerialId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_stock_adjustment_lines_serials_serial_id");
+
+                    b.HasOne("TechStorePro.Domain.Inventory.StockAdjustment", "StockAdjustment")
+                        .WithMany("Lines")
+                        .HasForeignKey("StockAdjustmentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_adjustment_lines_stock_adjustments_stock_adjustment_id");
+
+                    b.Navigation("Product");
+
+                    b.Navigation("Serial");
+
+                    b.Navigation("StockAdjustment");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockBalance", b =>
+                {
+                    b.HasOne("TechStorePro.Domain.Catalog.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_balances_products_product_id");
+
+                    b.HasOne("TechStorePro.Domain.Identity.Warehouse", "Warehouse")
+                        .WithMany()
+                        .HasForeignKey("WarehouseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_balances_warehouses_warehouse_id");
+
+                    b.Navigation("Product");
+
+                    b.Navigation("Warehouse");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockCount", b =>
+                {
+                    b.HasOne("TechStorePro.Domain.Identity.Branch", "Branch")
+                        .WithMany()
+                        .HasForeignKey("BranchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_counts_branches_branch_id");
+
+                    b.HasOne("TechStorePro.Domain.Identity.Warehouse", "Warehouse")
+                        .WithMany()
+                        .HasForeignKey("WarehouseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_counts_warehouses_warehouse_id");
+
+                    b.Navigation("Branch");
+
+                    b.Navigation("Warehouse");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockCountLine", b =>
+                {
+                    b.HasOne("TechStorePro.Domain.Catalog.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_count_lines_products_product_id");
+
+                    b.HasOne("TechStorePro.Domain.Inventory.Serial", "Serial")
+                        .WithMany()
+                        .HasForeignKey("SerialId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_stock_count_lines_serials_serial_id");
+
+                    b.HasOne("TechStorePro.Domain.Inventory.StockCount", "StockCount")
+                        .WithMany("Lines")
+                        .HasForeignKey("StockCountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_count_lines_stock_counts_stock_count_id");
+
+                    b.Navigation("Product");
+
+                    b.Navigation("Serial");
+
+                    b.Navigation("StockCount");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockMovement", b =>
+                {
+                    b.HasOne("TechStorePro.Domain.Identity.Branch", "Branch")
+                        .WithMany()
+                        .HasForeignKey("BranchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_movements_branches_branch_id");
+
+                    b.HasOne("TechStorePro.Domain.Catalog.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_movements_products_product_id");
+
+                    b.HasOne("TechStorePro.Domain.Inventory.Serial", "Serial")
+                        .WithMany()
+                        .HasForeignKey("SerialId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_stock_movements_serials_serial_id");
+
+                    b.HasOne("TechStorePro.Domain.Identity.Warehouse", "Warehouse")
+                        .WithMany()
+                        .HasForeignKey("WarehouseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_movements_warehouses_warehouse_id");
+
+                    b.Navigation("Branch");
+
+                    b.Navigation("Product");
+
+                    b.Navigation("Serial");
+
+                    b.Navigation("Warehouse");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockReservation", b =>
+                {
+                    b.HasOne("TechStorePro.Domain.Catalog.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_reservations_products_product_id");
+
+                    b.HasOne("TechStorePro.Domain.Inventory.Serial", "Serial")
+                        .WithMany()
+                        .HasForeignKey("SerialId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_stock_reservations_serials_serial_id");
+
+                    b.HasOne("TechStorePro.Domain.Identity.Warehouse", "Warehouse")
+                        .WithMany()
+                        .HasForeignKey("WarehouseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_reservations_warehouses_warehouse_id");
+
+                    b.Navigation("Product");
+
+                    b.Navigation("Serial");
+
+                    b.Navigation("Warehouse");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockTransfer", b =>
+                {
+                    b.HasOne("TechStorePro.Domain.Identity.Branch", "Branch")
+                        .WithMany()
+                        .HasForeignKey("BranchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_transfers_branches_branch_id");
+
+                    b.HasOne("TechStorePro.Domain.Identity.Warehouse", "FromWarehouse")
+                        .WithMany()
+                        .HasForeignKey("FromWarehouseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_transfers_warehouses_from_warehouse_id");
+
+                    b.HasOne("TechStorePro.Domain.Identity.Warehouse", "ToWarehouse")
+                        .WithMany()
+                        .HasForeignKey("ToWarehouseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_transfers_warehouses_to_warehouse_id");
+
+                    b.Navigation("Branch");
+
+                    b.Navigation("FromWarehouse");
+
+                    b.Navigation("ToWarehouse");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockTransferLine", b =>
+                {
+                    b.HasOne("TechStorePro.Domain.Catalog.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_transfer_lines_products_product_id");
+
+                    b.HasOne("TechStorePro.Domain.Inventory.Serial", "Serial")
+                        .WithMany()
+                        .HasForeignKey("SerialId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_stock_transfer_lines_serials_serial_id");
+
+                    b.HasOne("TechStorePro.Domain.Inventory.StockTransfer", "StockTransfer")
+                        .WithMany("Lines")
+                        .HasForeignKey("StockTransferId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_stock_transfer_lines_stock_transfers_stock_transfer_id");
+
+                    b.Navigation("Product");
+
+                    b.Navigation("Serial");
+
+                    b.Navigation("StockTransfer");
+                });
+
             modelBuilder.Entity("TechStorePro.Domain.Catalog.PriceList", b =>
                 {
                     b.Navigation("Items");
@@ -2614,6 +4039,26 @@ namespace TechStorePro.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("TechStorePro.Domain.Identity.Warehouse", b =>
                 {
                     b.Navigation("AccessibleToBranches");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.Serial", b =>
+                {
+                    b.Navigation("Events");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockAdjustment", b =>
+                {
+                    b.Navigation("Lines");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockCount", b =>
+                {
+                    b.Navigation("Lines");
+                });
+
+            modelBuilder.Entity("TechStorePro.Domain.Inventory.StockTransfer", b =>
+                {
+                    b.Navigation("Lines");
                 });
 #pragma warning restore 612, 618
         }

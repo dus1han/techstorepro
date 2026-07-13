@@ -21,7 +21,13 @@ builder.Services.AddInfrastructure(builder.Configuration);
 // Per-request identity and tenant, both read from the caller's JWT.
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUser, CurrentUser>();
-builder.Services.AddScoped<ITenantContext, TenantContext>();
+
+// One TenantContext per scope, exposed under both interfaces — they must be the same instance, or a
+// background job would pin the company on one object and the DbContext would read the tenant off
+// another and still see null.
+builder.Services.AddScoped<TenantContext>();
+builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<TenantContext>());
+builder.Services.AddScoped<ITenantSetter>(sp => sp.GetRequiredService<TenantContext>());
 
 var jwt = builder.Configuration.GetSection("Jwt");
 builder.Services
