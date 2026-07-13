@@ -24,7 +24,14 @@ public enum DocumentType : short
     StockCount = 12,
     RepairTicket = 13,
     Expense = 14,
-    ImportShipment = 15
+    ImportShipment = 15,
+
+    /// <summary>
+    /// The shop's own number for a bill it received. Distinct from <see cref="Invoice"/>, which is a
+    /// bill the shop *sent* — sharing one sequence would interleave money owed with money due and make
+    /// "INV-2026-00042" ambiguous about which direction it points.
+    /// </summary>
+    SupplierInvoice = 16
 }
 
 /// <summary>

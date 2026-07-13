@@ -44,7 +44,22 @@ public enum MovementType : short
 
     /// <summary>The variance an approved physical count wrote off. Positive or negative.</summary>
     CountAdjustmentIn = 12,
-    CountAdjustmentOut = 13
+    CountAdjustmentOut = 13,
+
+    /// <summary>
+    /// <b>Money, no units.</b> The landed cost of an import folded into stock that has already been
+    /// received (P4, requirements §26).
+    ///
+    /// It exists because the goods and their true cost do not arrive together: the container is
+    /// unpacked and on the shelf in March, and the clearing agent's invoice turns up in April. The
+    /// receipt has to post when the goods physically arrive — refusing to book stock the shop can see
+    /// would be absurd — so the freight, duty and clearing that belong to it must be foldable in
+    /// afterwards, raising the weighted average without inventing a single unit.
+    ///
+    /// This is the only movement type whose <see cref="MovementTypes.Direction"/> is zero, and the
+    /// only one that carries <see cref="StockMovement.ValueAdjustment"/>.
+    /// </summary>
+    Revaluation = 14
 }
 
 /// <summary>What document caused the movement. The pair (type, id) is the audit trail back to it.</summary>
@@ -85,11 +100,21 @@ public static class MovementTypes
         MovementType.RepairConsumption => -1,
         MovementType.CountAdjustmentOut => -1,
 
+        // Zero, and it is the only one. A revaluation moves money, not units — see the enum member.
+        MovementType.Revaluation => 0,
+
         _ => throw new DomainException($"Movement type {type} has no defined direction.")
     };
 
     public static bool IsInbound(this MovementType type) => type.Direction() > 0;
     public static bool IsOutbound(this MovementType type) => type.Direction() < 0;
+
+    /// <summary>
+    /// Moves money without moving units. Neither inbound nor outbound — which is why every caller that
+    /// branches on <see cref="IsInbound"/> / <see cref="IsOutbound"/> must handle this <em>first</em>
+    /// rather than assuming the two are exhaustive.
+    /// </summary>
+    public static bool IsRevaluation(this MovementType type) => type == MovementType.Revaluation;
 
     /// <summary>
     /// Must this movement be told what the stock cost, or may it take the warehouse's current average?
@@ -161,6 +186,18 @@ public class StockMovement : AuditableEntity, ITenantScoped
     /// snapshots. Never null: a movement with no cost is a hole in the valuation report.
     /// </summary>
     public decimal UnitCost { get; set; }
+
+    /// <summary>
+    /// Value added to (or taken from) the stock without any units moving. Zero for every movement type
+    /// except <see cref="MovementType.Revaluation"/>, which is the landed cost of an import folded into
+    /// goods that were received weeks earlier.
+    ///
+    /// <b>The balance audit depends on this column existing.</b> The audit recomputes what the stock is
+    /// worth as a plain <c>SUM(quantity × unit_cost + value_adjustment)</c>. Without the second term, a
+    /// revaluation would move the cached average while contributing nothing to the recomputed one, and
+    /// the audit would report a permanent, unfixable discrepancy on every import the shop ever landed.
+    /// </summary>
+    public decimal ValueAdjustment { get; set; }
 
     /// <summary>The moving average <em>after</em> this movement was applied. Stored so that a
     /// valuation as of a past date can be read straight off the ledger rather than replayed.</summary>

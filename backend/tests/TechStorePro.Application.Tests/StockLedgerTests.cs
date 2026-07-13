@@ -560,6 +560,42 @@ public class StockLedgerTests : IAsyncLifetime
         (await new BalanceAuditor(fresh).AuditAsync()).Agrees.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task An_adjustment_counts_each_of_its_lines_exactly_once()
+    {
+        // Found while building P4, and it had already shipped in P3.
+        //
+        // The handler added each line to the DbSet *and* to adjustment.Lines. EF's relationship fixup
+        // had already put it in the navigation collection, so the by-hand add put the same instance in
+        // twice — and NetValue, the money written off, came out double what the document said. The
+        // database was fine; every total computed from the in-memory graph was not.
+        await using var db = CreateContext(_companyA);
+
+        var handler = new CreateAdjustmentCommandHandler(
+            db,
+            Ledger(db),
+            new DocumentNumberGenerator(new ApplicationDbContextAccessor(db), db, new StubTenant(_companyA), new StubClock()),
+            new StubClock());
+
+        var adjustmentId = await handler.Handle(
+            new CreateAdjustmentCommand(
+                WarehouseId: _warehouseOfA,
+                BranchId: _branchOfA,
+                Reason: AdjustmentReason.OpeningStock,
+                Explanation: "Opening stock",
+                Lines: [new CreateAdjustmentLine(ProductId: _cable, Quantity: 10, UnitCost: 100m)]),
+            CancellationToken.None);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var adjustment = await fresh.StockAdjustments
+            .Include(a => a.Lines)
+            .FirstAsync(a => a.Id == adjustmentId);
+
+        adjustment.Lines.Should().ContainSingle("one line was adjusted, so the document holds one line");
+        adjustment.NetValue.Should().Be(1_000m, "ten units at 100 — not twenty");
+    }
+
     // --- Tenancy --------------------------------------------------------------------------------
 
     [Fact]

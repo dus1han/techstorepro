@@ -284,17 +284,96 @@ public class StockBalanceTests
         {
             var act = () => type.Direction();
 
-            act.Should().NotThrow($"{type} must declare whether it raises or lowers stock");
-            Math.Abs(type.Direction()).Should().Be(1);
+            act.Should().NotThrow($"{type} must declare whether it raises, lowers, or does not move stock");
         }
     }
 
     [Fact]
-    public void Inbound_and_outbound_are_exhaustive_and_exclusive()
+    public void Exactly_one_movement_type_moves_money_without_moving_units()
     {
+        // Revaluation is the sole exception to "every movement moves stock", and it is worth pinning
+        // as a fact rather than leaving as a convention: it is the landed cost of an import folded
+        // into goods received weeks earlier, and a second type sneaking in with direction zero would
+        // silently acquire the same power to change the valuation without a unit changing hands.
+        var zeroDirection = Enum.GetValues<MovementType>()
+            .Where(t => t.Direction() == 0)
+            .ToList();
+
+        zeroDirection.Should().Equal(MovementType.Revaluation);
+    }
+
+    [Fact]
+    public void Inbound_outbound_and_revaluation_are_exhaustive_and_exclusive()
+    {
+        // Callers branch on these. If a type were somehow none of the three — or two of them — the
+        // branch that handles it would be whichever the author happened to write first.
         foreach (var type in Enum.GetValues<MovementType>())
         {
-            type.IsInbound().Should().Be(!type.IsOutbound(), $"{type} must be exactly one of the two");
+            var matches = new[] { type.IsInbound(), type.IsOutbound(), type.IsRevaluation() }
+                .Count(x => x);
+
+            matches.Should().Be(1, $"{type} must be exactly one of inbound, outbound or revaluation");
         }
+    }
+
+    // --- Revaluation: money without units -------------------------------------------------------
+
+    [Fact]
+    public void Landed_cost_raises_the_average_without_creating_a_single_unit()
+    {
+        // The container was unpacked in March and the clearing agent invoiced in April. The freight
+        // belongs to those ten laptops, and they are still on the shelf.
+        var balance = Balance(quantity: 10, averageCost: 1_000m);
+
+        var average = balance.ApplyRevaluation(2_000m);
+
+        average.Should().Be(1_200m);
+        balance.Quantity.Should().Be(10, "freight does not conjure laptops");
+        balance.TotalValue.Should().Be(12_000m);
+    }
+
+    [Fact]
+    public void Landed_cost_with_nothing_left_to_carry_it_is_refused()
+    {
+        // The shipment sold out before the clearing invoice arrived. There is no stock for the cost to
+        // attach to — spreading it over an empty balance would divide by zero, and spreading it over
+        // the *next* shipment's units would charge one container's freight to another's goods.
+        var balance = Balance(quantity: 0, averageCost: 1_000m);
+
+        var act = () => balance.ApplyRevaluation(2_000m);
+
+        act.Should().Throw<DomainException>().WithMessage("*no stock left to carry this cost*");
+    }
+
+    [Fact]
+    public void A_revaluation_of_zero_is_refused()
+    {
+        var balance = Balance(quantity: 10, averageCost: 1_000m);
+
+        var act = () => balance.ApplyRevaluation(0m);
+
+        act.Should().Throw<DomainException>().WithMessage("*revalues nothing*");
+    }
+
+    [Fact]
+    public void Stock_cannot_be_revalued_to_less_than_nothing()
+    {
+        // A credit note larger than the stock's whole value means something upstream is wrong. A
+        // negative average would poison the COGS of every future sale of the product.
+        var balance = Balance(quantity: 10, averageCost: 100m);
+
+        var act = () => balance.ApplyRevaluation(-2_000m);
+
+        act.Should().Throw<DomainException>().WithMessage("*less than nothing*");
+    }
+
+    [Fact]
+    public void A_credit_note_can_lower_the_average()
+    {
+        // The freight was over-billed and the agent refunded some of it. That has to come back out of
+        // the stock's value, or the shop keeps selling at a cost it never actually paid.
+        var balance = Balance(quantity: 10, averageCost: 1_200m);
+
+        balance.ApplyRevaluation(-1_000m).Should().Be(1_100m);
     }
 }

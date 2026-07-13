@@ -232,12 +232,44 @@ GET    /api/v1/inventory/serials        ?productId=&status=&warehouseId=
 GET    /api/v1/inventory/serials/{serialNumber}   full history — the warranty-claim query
 POST   /api/v1/inventory/labels/print   returns a PDF (Code128 / EAN-13 / QR; thermal or A4 sheet)
 
-# Purchasing and imports
+# Purchasing and imports — built (P4)
 GET    /api/v1/purchase-orders          POST, /{id}/approve, /{id}/cancel
-POST   /api/v1/goods-receipts
+                                        Optional: §25 says so. A GRN needs no PO.
+POST   /api/v1/goods-receipts           receives goods AND posts them to stock, in one transaction.
+                                        purchaseOrderId is nullable — the direct purchase
+                                        (supplier → GRN → stock) is a first-class flow.
+                                        Serial numbers are captured here, at the door.
+
 GET    /api/v1/import-shipments         POST
-POST   /api/v1/import-shipments/{id}/costs        add freight, duty, clearing
-POST   /api/v1/import-shipments/{id}/apportion    fold landed cost into inventory
+POST   /api/v1/import-shipments/{id}/charges     freight, insurance, customs, clearing — any currency
+POST   /api/v1/import-shipments/{id}/apportion   ?basis=ByValue   fold landed cost into inventory
+```
+
+### The import flow, and why it is shaped like this
+
+**Goods and their true cost do not arrive together.** The container is unpacked and on the shelf in
+March; the clearing agent invoices in April. The shop cannot refuse to book stock it can physically
+see, so:
+
+1. `POST /import-shipments` — the container is on the water.
+2. `POST /goods-receipts` — it lands. **Stock posts immediately, at the goods price.**
+3. `POST /import-shipments/{id}/charges` — freight, duty, insurance, clearing, as each is billed.
+4. `POST /import-shipments/{id}/apportion` — folds that cost into the stock.
+
+Step 4 posts a **`Revaluation`** movement: money into inventory, without inventing a unit. It is gated
+on `Approve`, not `Edit`, and that is not ceremony — costing is weighted average (§45 D1), so the money
+it moves feeds the moving average of every product in the container and spreads to units that arrived
+years ago, where it **never washes out**.
+
+Apportionment is **by value** (§45 D6), with the rounding remainder going to the largest line, so the
+apportioned total equals the charge total to the fils.
+
+It returns what was **absorbed** and what was not. If the container sold out before its clearing
+invoice arrived, there is no stock left to carry that cost: the remainder is reported and recorded on
+the shipment, rather than silently dropped (which would overstate margin) or smeared over whatever else
+is on the shelf (which would charge one container's freight to another's goods).
+
+```
 
 # Sales
 GET    /api/v1/quotes                   POST, /{id}/convert

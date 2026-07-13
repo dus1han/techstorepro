@@ -61,6 +61,13 @@ public static class FeatureCatalog
     public const string Serials = "inventory.serials";
     public const string Barcodes = "inventory.barcodes";
 
+    // --- P4: purchasing and imports ---
+    public const string PurchaseOrders = "purchasing.orders";
+    public const string GoodsReceipts = "purchasing.receipts";
+    public const string SupplierInvoices = "purchasing.invoices";
+    public const string SupplierPayments = "purchasing.payments";
+    public const string ImportShipments = "purchasing.imports";
+
     private static readonly PermissionAction[] ReadOnly = [PermissionAction.View, PermissionAction.Export];
 
     private static readonly PermissionAction[] Full =
@@ -125,7 +132,27 @@ public static class FeatureCatalog
 
         new() { Code = Reservations, Module = "Inventory", Name = "Stock reservations", DisplayOrder = 260, SupportedActions = Manage },
         new() { Code = Serials, Module = "Inventory", Name = "Serial numbers", DisplayOrder = 270, SupportedActions = [PermissionAction.View, PermissionAction.Export, PermissionAction.Print] },
-        new() { Code = Barcodes, Module = "Inventory", Name = "Barcodes & labels", DisplayOrder = 280, SupportedActions = [PermissionAction.View, PermissionAction.Print] }
+        new() { Code = Barcodes, Module = "Inventory", Name = "Barcodes & labels", DisplayOrder = 280, SupportedActions = [PermissionAction.View, PermissionAction.Print] },
+
+        // Purchasing. Note where Approve sits, because that is where the money is.
+        //
+        // A purchase order commits the company to spending, so approving one is the control — and it is
+        // separate from creating one, so the person who chooses the supplier need not be the person who
+        // signs for the cost.
+        new() { Code = PurchaseOrders, Module = "Purchasing", Name = "Purchase orders", DisplayOrder = 310, SupportedActions = ManageAndApprove },
+
+        // Receiving goods moves stock and sets the cost that feeds the moving average. There is no
+        // approval step — the goods are physically here, and refusing to book them because a manager is
+        // at lunch would leave the shelf and the system disagreeing.
+        new() { Code = GoodsReceipts, Module = "Purchasing", Name = "Goods receipts", DisplayOrder = 320, SupportedActions = Manage },
+
+        new() { Code = SupplierInvoices, Module = "Purchasing", Name = "Supplier invoices", DisplayOrder = 330, SupportedActions = ManageAndApprove },
+        new() { Code = SupplierPayments, Module = "Purchasing", Name = "Supplier payments", DisplayOrder = 340, SupportedActions = ManageAndApprove },
+
+        // Approve is the one that matters here, and it is not a formality: approving an import's
+        // apportionment folds its freight into the weighted average of every product in the container,
+        // where it spreads to stock that arrived years ago and never washes out (§45 D1, D6).
+        new() { Code = ImportShipments, Module = "Purchasing", Name = "Import shipments & landed cost", DisplayOrder = 350, SupportedActions = ManageAndApprove }
     ];
 
     public static bool Exists(string code) => All.Any(f => f.Code == code);

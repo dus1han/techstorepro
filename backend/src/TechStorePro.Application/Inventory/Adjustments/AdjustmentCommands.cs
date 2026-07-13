@@ -286,8 +286,10 @@ public class CreateAdjustmentCommandHandler : IRequestHandler<CreateAdjustmentCo
                 // would emit an UPDATE against a line that has never been inserted, match zero rows, and
                 // throw DbUpdateConcurrencyException. The navigation still gets it, because Validate()
                 // below counts the lines.
+                // And ONLY the DbSet. EF's relationship fixup adds it to adjustment.Lines itself, so
+                // adding it there by hand as well would hold the same instance twice and NetValue —
+                // the money written off — would be double what the document actually says.
                 _db.StockAdjustmentLines.Add(documentLine);
-                adjustment.Lines.Add(documentLine);
             }
         }
 

@@ -321,8 +321,9 @@ public class CountLineCommandHandler : IRequestHandler<CountLineCommand, Guid>
         // and is Unchanged, and a child discovered on an Unchanged parent with an id already set is
         // taken by EF for an existing row — it would UPDATE a line that has never been inserted, match
         // zero rows, and throw. Every scan on the shelf would fail.
+        // ONLY the DbSet — EF's fixup adds it to count.Lines itself, and adding it there by hand as
+        // well would hold the same line twice, doubling the variance the count computes.
         _db.StockCountLines.Add(line);
-        count.Lines.Add(line);
 
         await _db.SaveChangesAsync(cancellationToken);
 
@@ -475,8 +476,8 @@ public class ApproveCountCommandHandler : IRequestHandler<ApproveCountCommand, G
                 // Through the DbSet: PostAsync has already saved, so `adjustment` is Unchanged and EF
                 // would take these lines for existing rows and UPDATE nothing. See the same note in
                 // CreateAdjustmentCommandHandler.
+                // ONLY the DbSet — see the note in CreateAdjustmentCommandHandler.
                 _db.StockAdjustmentLines.Add(adjustmentLine);
-                adjustment.Lines.Add(adjustmentLine);
             }
         }
 

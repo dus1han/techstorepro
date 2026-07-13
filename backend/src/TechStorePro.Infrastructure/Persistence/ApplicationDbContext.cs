@@ -8,6 +8,7 @@ using TechStorePro.Domain.Common;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
+using TechStorePro.Domain.Purchasing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -56,6 +57,19 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     // --- The platform, not a tenant ------------------------------------------------------------
     public DbSet<PlatformAdmin> PlatformAdmins => Set<PlatformAdmin>();
     public DbSet<PlatformRefreshToken> PlatformRefreshTokens => Set<PlatformRefreshToken>();
+
+    // --- Purchasing and imports (P4) -----------------------------------------------------------
+    public DbSet<PurchaseOrder> PurchaseOrders => Set<PurchaseOrder>();
+    public DbSet<PurchaseOrderLine> PurchaseOrderLines => Set<PurchaseOrderLine>();
+    public DbSet<GoodsReceipt> GoodsReceipts => Set<GoodsReceipt>();
+    public DbSet<GoodsReceiptLine> GoodsReceiptLines => Set<GoodsReceiptLine>();
+    public DbSet<GoodsReceiptSerial> GoodsReceiptSerials => Set<GoodsReceiptSerial>();
+    public DbSet<SupplierInvoice> SupplierInvoices => Set<SupplierInvoice>();
+    public DbSet<SupplierInvoiceLine> SupplierInvoiceLines => Set<SupplierInvoiceLine>();
+    public DbSet<SupplierPayment> SupplierPayments => Set<SupplierPayment>();
+    public DbSet<SupplierPaymentAllocation> SupplierPaymentAllocations => Set<SupplierPaymentAllocation>();
+    public DbSet<ImportShipment> ImportShipments => Set<ImportShipment>();
+    public DbSet<ImportShipmentCharge> ImportShipmentCharges => Set<ImportShipmentCharge>();
 
     // --- Configuration (P1) ------------------------------------------------------------------
     public DbSet<SettingDefinition> SettingDefinitions => Set<SettingDefinition>();

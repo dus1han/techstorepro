@@ -3,6 +3,7 @@ using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
+using TechStorePro.Domain.Purchasing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -27,6 +28,19 @@ public interface IApplicationDbContext
     DbSet<RefreshToken> RefreshTokens { get; }
     DbSet<LoginHistory> LoginHistory { get; }
     DbSet<Feature> Features { get; }
+
+    // --- Purchasing and imports (P4) -----------------------------------------------------------
+    DbSet<PurchaseOrder> PurchaseOrders { get; }
+    DbSet<PurchaseOrderLine> PurchaseOrderLines { get; }
+    DbSet<GoodsReceipt> GoodsReceipts { get; }
+    DbSet<GoodsReceiptLine> GoodsReceiptLines { get; }
+    DbSet<GoodsReceiptSerial> GoodsReceiptSerials { get; }
+    DbSet<SupplierInvoice> SupplierInvoices { get; }
+    DbSet<SupplierInvoiceLine> SupplierInvoiceLines { get; }
+    DbSet<SupplierPayment> SupplierPayments { get; }
+    DbSet<SupplierPaymentAllocation> SupplierPaymentAllocations { get; }
+    DbSet<ImportShipment> ImportShipments { get; }
+    DbSet<ImportShipmentCharge> ImportShipmentCharges { get; }
 
     // --- The platform, not a tenant ------------------------------------------------------------
     // Deliberately not ITenantScoped: a platform admin belongs to no company. These are the only

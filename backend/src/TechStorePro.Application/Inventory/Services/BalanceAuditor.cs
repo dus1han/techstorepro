@@ -58,13 +58,19 @@ public class BalanceAuditor : IBalanceAuditor
                 // recomputing it later). So the money is recomputed from first principles, in one SUM,
                 // with no ordering and no business logic.
                 //
+                // `+ value_adjustment` is the landed cost of an import folded into stock that was
+                // already on the shelf (P4): money with no units behind it. Leave the term out and
+                // every shipment the shop ever landed would show up here as a permanent discrepancy
+                // that nobody could clear — the cached average would have moved and the recomputed one
+                // would not.
+                //
                 // It deliberately does NOT compare against StockMovement.AverageCostAfter. That column
                 // is written *from* the balance — comparing the cache to a copy of itself would pass
                 // happily for any corruption that was followed by another movement, because the next
                 // movement would faithfully record the corrupted average as though it were correct.
                 LedgerValue = _db.StockMovements
                     .Where(m => m.ProductId == b.ProductId && m.WarehouseId == b.WarehouseId)
-                    .Sum(m => m.Quantity * m.UnitCost)
+                    .Sum(m => (m.Quantity * m.UnitCost) + m.ValueAdjustment)
             })
             .ToListAsync(cancellationToken);
 

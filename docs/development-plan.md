@@ -1,6 +1,6 @@
 # Development plan
 
-> Status: **P0–P3 complete. CI is running. P4 (purchasing) is next but blocked on Q2 (landed-cost basis).**
+> Status: **P0–P4 complete. CI is running. P5 (sales) is next but blocked on Q6 (tax model) and Q8 (foreign-currency invoicing).**
 >
 > Phases are numbered P0–P9 and match [architecture.md §6](architecture.md). The earlier M0–M8
 > milestone numbering is gone: it mapped almost one-to-one, and keeping two schemes alive only
@@ -16,8 +16,10 @@
 3. **Every phase is shippable.** A phase ends with something the shop could actually use, not a
    half-wired layer.
 4. **Answer the open question before you build the phase it blocks** (see
-   [requirements.md §46](requirements.md)). Costing is decided (weighted average);
-   **landed-cost basis is the expensive one still open.**
+   [requirements.md §46](requirements.md)). Costing is decided (weighted average, D1) and so is
+   landed cost (by value, D6 — its worked example became a test before a line of the code existed).
+   **The tax model (Q6) is the expensive one still open**: inclusive-vs-exclusive changes every price
+   field and every line calculation in sales.
 5. **The cross-tenant denial test is a gate, not a nicety.** It runs at every phase boundary. One
    database holds every company's data; that test is the only thing standing between them.
 
@@ -147,18 +149,51 @@ that the same serial cannot be sold twice, that a rolled-back transaction leaves
 the audit itself fails when a balance is corrupted behind the ledger's back** — in quantity *or* in
 cost. The cross-tenant gate grew to cover all ten new tenant-scoped tables.
 
-### P4 — Purchasing and imports
+### P4 — Purchasing and imports ✅ done
 
-Purchase orders (optional), goods receipts with serial capture, supplier invoices and payments,
-import shipments, **landed cost**, foreign-currency purchases and FX gain/loss.
+**Q2 is answered** (§45 **D6**): landed cost is apportioned **by value**, remainder to the largest line.
+The business's worked example became a test *before* the code, exactly as this plan demanded.
 
-- 🔴 **Blocked on Q2: the landed-cost apportionment basis** — by value, by weight, or by quantity?
-  Needs worked examples from the business, turned into tests, *before* the code.
-- This is now sharper than it looks. With weighted-average costing, a landed-cost error does not just
-  misprice the imported units — it feeds the moving average and **spreads to all existing stock of
-  that product**.
-- GRN works **without** a PO: requirements §25 makes the PO optional and defines a direct-purchase
-  flow, so `goods_receipts.purchase_order_id` is nullable.
+**Delivered (11 new tables, 53 in total):**
+
+- **Purchase orders — optional, and meant it.** Requirements §25 says "PO is optional", so
+  `goods_receipts.purchase_order_id` is nullable and the direct purchase (supplier → GRN → stock) is a
+  first-class path. Forcing an order would only produce fakes raised after the fact, which look real
+  and are therefore worse than none.
+- **Goods receipts** with serial capture at the door — which is what makes P6's warranty claim
+  answerable two years later.
+- **Import shipments**, their charges (freight, insurance, customs, clearing, in any currency), and
+  **landed cost**.
+- **Supplier invoices and payments**, header + allocations: one transfer settles three invoices, one
+  invoice is settled by two instalments. A single `invoice_id` on a payment expresses neither.
+- **FX gain/loss on settlement.** A USD 1,000 invoice booked at 3.67 and paid at 3.60 leaves the shop
+  AED 70 better off. That gain came from the currency moving, not from selling anything — so it is
+  **not** folded back into the cost of the stock. The laptops did not become cheaper to buy.
+
+**The hard part, and the thing to remember about this phase.** Goods and their true cost do not arrive
+together: the container is unpacked in March and the clearing agent invoices in April. The receipt has
+to post when the goods physically arrive, so the charges are folded in afterwards by a new
+**`MovementType.Revaluation`** — money into stock, without inventing a unit. That forced a new column,
+`stock_movements.value_adjustment`, and a corresponding change to the balance audit, which now
+recomputes value as `SUM(quantity × unit_cost + value_adjustment)`. Leave that second term out and
+every import the shop ever landed would show as a permanent discrepancy nobody could clear.
+
+**When the stock has already gone**, the cost has nowhere to live: the container sold out before its
+clearing invoice arrived. That money is not silently dropped (it would overstate margin) and not
+smeared over whatever else is on the shelf (that would charge one container's freight to another's
+goods). It is recorded as `import_shipments.unabsorbed_cost` — visible, attributable, and P7's to
+expense.
+
+**Tests: 173 → 231.** The D6 worked example is pinned twice: once as pure arithmetic, and once end to
+end against a real database, where 10 laptops at 1,000 and 100 cables at 50 in a container carrying
+AED 3,000 land at exactly 1,200 and 60. Also proven: the ledger still audits clean after a revaluation,
+a container cannot be costed twice (which would double the freight inside a moving average, where it
+would never wash out), and an unabsorbed remainder is reported rather than hidden.
+
+**A P3 bug fell out of building this.** Adjustment and count handlers added each line to the DbSet *and*
+to the parent's navigation collection; EF's fixup had already done the latter, so every total computed
+from the in-memory graph — including an adjustment's `NetValue`, the money written off — was **double**.
+The database was correct; the documents were not. Fixed, with a regression test.
 
 ### P5 — Sales
 

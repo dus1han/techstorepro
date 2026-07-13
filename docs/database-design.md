@@ -114,9 +114,9 @@ fx_rates             id, company_id, currency_code, rate_to_base, rate_date
 
 ```
 stock_movements      id, company_id, branch_id, warehouse_id, product_id, serial_id (null),
-                     movement_type, quantity (signed), unit_cost, average_cost_after,
-                     balance_after, reference_type, reference_id, reference_number,
-                     notes, occurred_at
+                     movement_type, quantity (signed), unit_cost, value_adjustment,
+                     average_cost_after, balance_after, reference_type, reference_id,
+                     reference_number, notes, occurred_at
 stock_balances       id, company_id, warehouse_id, product_id, quantity, reserved_quantity,
                      average_cost
                      -- a cache of movements; unique (company_id, warehouse_id, product_id)
@@ -153,6 +153,60 @@ against this afternoon's ledger and invent a variance out of the sales that happ
 `stock_movements`, `stock_balances` and `serial_events` are **not soft-deletable**: a ledger you can
 retire a row from is not a ledger, and a balance of zero is a fact rather than a retired row. A
 correction is a new, opposing movement.
+
+**`value_adjustment` is money with no units behind it** — the landed cost of an import folded into
+stock that was received weeks earlier (`movement_type = Revaluation`, the only type whose direction is
+zero). It exists because goods and their true cost do not arrive together. The balance audit therefore
+recomputes value as `SUM(quantity × unit_cost + value_adjustment)`; leave the second term out and every
+import the shop ever landed would show as a permanent discrepancy nobody could clear.
+
+### Purchasing and imports (P4)
+
+```
+purchase_orders      id, company_id, branch_id, warehouse_id, supplier_id, number, status,
+                     currency_code, exchange_rate, ordered_at, expected_at, approved_by, approved_at
+purchase_order_lines id, company_id, purchase_order_id, product_id, quantity, unit_price,
+                     discount_percent, received_quantity
+goods_receipts       id, company_id, branch_id, warehouse_id, supplier_id, number,
+                     purchase_order_id (NULL), import_shipment_id (NULL),
+                     currency_code, exchange_rate, supplier_reference, received_at
+goods_receipt_lines  id, company_id, goods_receipt_id, purchase_order_line_id (null), product_id,
+                     quantity, unit_price, discount_percent, apportioned_cost
+goods_receipt_serials  id, company_id, goods_receipt_line_id, serial_number, serial_id
+import_shipments     id, company_id, branch_id, supplier_id, number, status, transport_document,
+                     vessel_or_flight, shipped_at, arrived_at, costed_at, unabsorbed_cost
+import_shipment_charges  id, company_id, import_shipment_id, charge_type, vendor, amount,
+                     currency_code, exchange_rate, incurred_at
+supplier_invoices    id, company_id, branch_id, supplier_id, number, supplier_reference, status,
+                     goods_receipt_id (null), currency_code, exchange_rate, invoiced_at, due_at
+                     -- unique (company_id, supplier_id, supplier_reference): the same supplier
+                     -- cannot bill the same reference twice, or it would be paid twice
+supplier_invoice_lines   id, company_id, supplier_invoice_id, product_id (null), description,
+                     quantity, unit_price, discount_percent, tax_percent
+supplier_payments    id, company_id, branch_id, supplier_id, payment_method_id, number, reference,
+                     amount, currency_code, exchange_rate, paid_at
+supplier_payment_allocations  id, company_id, supplier_payment_id, supplier_invoice_id, amount,
+                     invoice_exchange_rate, payment_exchange_rate
+```
+
+**`goods_receipts.purchase_order_id` is nullable, deliberately.** Requirements §25 makes the PO optional
+and gives a direct-purchase flow, because a shop that drives to the wholesaler and comes back with a box
+genuinely has no order. Forcing one would only produce fakes raised after the fact — which look real,
+and are therefore worse than none.
+
+**A payment is a header plus allocations, not a column on an invoice.** One transfer settles three
+invoices; one invoice is settled by two instalments. A single `invoice_id` on a payment expresses
+neither, and a shop paying its supplier monthly does both constantly.
+
+**Both exchange rates are snapshotted on the allocation**, never looked up later. The invoice's rate is
+a fact about the day it was raised; re-reading it years afterwards would give the same answer only until
+somebody corrected a historical FX rate, at which point every past gain and loss in the system would
+silently change. The realised FX result is `amount × (invoice_rate − payment_rate)`, and it belongs in
+the P&L — **not** in the cost of the stock. The laptops did not become cheaper to buy; the currency
+moved.
+
+Rates are `numeric(18,6)`, not `(18,4)`: a rate multiplies a whole invoice, so its rounding error is
+multiplied too.
 
 Stock is keyed by **warehouse**, not branch. `branch_id` stays on the movement for reporting, but
 the balance a sale decrements is a warehouse balance.

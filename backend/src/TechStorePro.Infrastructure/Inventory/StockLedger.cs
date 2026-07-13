@@ -243,6 +243,63 @@ public class StockLedger : IStockLedger
         await _db.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<StockMovement> RevalueAsync(
+        Guid warehouseId,
+        Guid branchId,
+        Guid productId,
+        decimal valueAdjustment,
+        StockReferenceType referenceType,
+        Guid? referenceId,
+        string? referenceNumber,
+        DateTimeOffset? occurredAt = null,
+        string? notes = null,
+        CancellationToken cancellationToken = default)
+    {
+        var companyId = RequireTenantAndTransaction();
+
+        var at = occurredAt ?? _clock.UtcNow;
+
+        var product = await LoadStockableProductAsync(productId, cancellationToken);
+
+        // forIssue: false — nothing is leaving. This is money arriving at stock that is already here.
+        var warehouse = await LoadAccessibleWarehouseAsync(warehouseId, branchId, forIssue: false, cancellationToken);
+
+        var balance = await LockBalanceAsync(companyId, warehouse.Id, product.Id, cancellationToken);
+
+        // Throws if there is nothing left to carry the cost. That is a real situation — the shipment
+        // sold out before the clearing invoice arrived — and the caller has to answer for it rather
+        // than have the ledger quietly smear the money over whatever happens to be on the shelf.
+        var averageAfter = balance.ApplyRevaluation(valueAdjustment);
+
+        var movement = new StockMovement
+        {
+            CompanyId = companyId,
+            WarehouseId = warehouse.Id,
+            BranchId = branchId,
+            ProductId = product.Id,
+            Type = MovementType.Revaluation,
+
+            // No units moved. The entire economic content of this row is ValueAdjustment, and the
+            // balance audit sums exactly that alongside quantity × unit_cost.
+            Quantity = 0,
+            UnitCost = 0,
+            ValueAdjustment = valueAdjustment,
+
+            AverageCostAfter = averageAfter,
+            BalanceAfter = balance.Quantity,
+            ReferenceType = referenceType,
+            ReferenceId = referenceId,
+            ReferenceNumber = referenceNumber,
+            Notes = notes,
+            OccurredAt = at
+        };
+
+        _db.StockMovements.Add(movement);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return movement;
+    }
+
     public async Task<decimal> AvailableAsync(
         Guid warehouseId,
         Guid productId,

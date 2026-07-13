@@ -109,4 +109,30 @@ public interface IStockLedger
     /// "no balance row" and "a balance of nothing" are the same answer to a caller.
     /// </summary>
     Task<decimal> AvailableAsync(Guid warehouseId, Guid productId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <b>Folds money into stock without moving units.</b> Appends a
+    /// <see cref="MovementType.Revaluation"/> and raises the weighted average, under the same lock and
+    /// in the same transaction as everything else here.
+    ///
+    /// This is what lands an import's freight, duty and clearing on goods that were received before
+    /// those invoices existed (requirements §26). It is deliberately a first-class ledger operation
+    /// rather than an UPDATE on <c>stock_balances</c>: a cost correction that left no movement behind
+    /// would be exactly the out-of-band write the balance audit exists to catch, and the nightly job
+    /// would start screaming about a discrepancy nobody could explain.
+    ///
+    /// Throws if the balance is empty — see <see cref="StockBalance.ApplyRevaluation"/>. There is no
+    /// stock for the cost to attach to, and the caller must decide what to do about that.
+    /// </summary>
+    Task<StockMovement> RevalueAsync(
+        Guid warehouseId,
+        Guid branchId,
+        Guid productId,
+        decimal valueAdjustment,
+        StockReferenceType referenceType,
+        Guid? referenceId,
+        string? referenceNumber,
+        DateTimeOffset? occurredAt = null,
+        string? notes = null,
+        CancellationToken cancellationToken = default);
 }

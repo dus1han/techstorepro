@@ -20,6 +20,11 @@ public class StockMovementConfiguration : IEntityTypeConfiguration<StockMovement
         builder.Property(m => m.UnitCost).HasColumnType(CatalogTypes.Money);
         builder.Property(m => m.AverageCostAfter).HasColumnType(CatalogTypes.Money);
 
+        // Money with no units behind it: the landed cost of an import folded into stock that was
+        // received weeks earlier. The balance audit sums this alongside quantity × unit_cost — leave it
+        // out and every import would look like a permanent, unfixable discrepancy.
+        builder.Property(m => m.ValueAdjustment).HasColumnType(CatalogTypes.Money);
+
         builder.Ignore(m => m.Value);
 
         // The index behind "what happened to this product?" and behind historical stock, which replays

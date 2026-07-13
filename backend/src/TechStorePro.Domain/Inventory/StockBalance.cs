@@ -120,6 +120,51 @@ public class StockBalance : AuditableEntity, ITenantScoped
         return AverageCost;
     }
 
+    /// <summary>
+    /// Folds value into the stock on hand without moving a single unit, and returns the new average.
+    ///
+    /// This is how the landed cost of an import reaches inventory when the goods were received weeks
+    /// before the freight and clearing invoices arrived (requirements §26). The quantity does not
+    /// change; the money does; so the average per unit rises.
+    ///
+    /// <para><b>It refuses when there is nothing left to revalue.</b> If the whole shipment has already
+    /// been sold by the time the clearing invoice lands, there is no stock for the cost to attach to,
+    /// and spreading it over an empty balance would divide by zero — or, worse, over the *next*
+    /// shipment's units, silently charging one container's freight to another's goods. The caller has
+    /// to deal with that explicitly; see <c>ApportionLandedCostCommand</c>, which reports the
+    /// unabsorbed remainder rather than hiding it.</para>
+    /// </summary>
+    public decimal ApplyRevaluation(decimal valueAdjustment)
+    {
+        if (valueAdjustment == 0)
+        {
+            throw new DomainException("A revaluation of zero revalues nothing.");
+        }
+
+        if (Quantity <= 0)
+        {
+            throw new DomainException(
+                "There is no stock left to carry this cost. Landed cost cannot be folded into a "
+                + "balance of zero — it would have to be spread over units that were never in this "
+                + "shipment, or divided by nothing at all.");
+        }
+
+        var newValue = (Quantity * AverageCost) + valueAdjustment;
+
+        if (newValue < 0)
+        {
+            // Stock cannot be worth less than nothing. A credit note bigger than the stock's whole
+            // value means the cost was wrong somewhere upstream, and quietly parking a negative
+            // average in the ledger would poison the COGS of every future sale.
+            throw new DomainException(
+                "That would make the stock worth less than nothing. Check the charge before posting it.");
+        }
+
+        AverageCost = Math.Round(newValue / Quantity, 4, MidpointRounding.AwayFromZero);
+
+        return AverageCost;
+    }
+
     /// <summary>Requirements §20: promise stock to a quote or an order without moving it.</summary>
     public void Reserve(decimal quantity)
     {

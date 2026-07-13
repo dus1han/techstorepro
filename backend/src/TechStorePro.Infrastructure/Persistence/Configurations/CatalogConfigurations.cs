@@ -11,6 +11,15 @@ internal static class CatalogTypes
     public const string Money = "numeric(18,4)";
     public const string Quantity = "numeric(18,4)";
     public const string Percent = "numeric(9,4)";
+
+    /// <summary>
+    /// An FX rate, at six decimal places rather than four.
+    ///
+    /// It multiplies a whole invoice, so its rounding error is multiplied too: at four places, a rate
+    /// of 3.6725 truncated to 3.6725 is fine, but a weak currency quoted as 0.000123 would round to
+    /// 0.0001 — a 19% error on every line it touches. Six places is what a bank quotes.
+    /// </summary>
+    public const string Rate = "numeric(18,6)";
 }
 
 public class ProductCategoryConfiguration : IEntityTypeConfiguration<ProductCategory>
