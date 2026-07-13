@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: techstorepro-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: techstorepro
+      POSTGRES_USER: techstorepro
+      # Development only. Every other environment injects this from a secret store.
+      POSTGRES_PASSWORD: techstorepro_dev_password
+    ports:
+      # Host 5433, not 5432: a locally-installed PostgreSQL commonly owns 5432, and two servers
+      # fighting over the port fails in a confusing way — the app connects successfully to the
+      # *wrong* database and reports an authentication error. The container is unchanged internally.
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Runs once, only when the data volume is empty.
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U techstorepro -d techstorepro"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: techstorepro-pgadmin
+    restart: unless-stopped
+    profiles: ["tools"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: dev@techstorepro.local
+      PGADMIN_DEFAULT_PASSWORD: pgadmin_dev_password
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

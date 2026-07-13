@@ -1,0 +1,144 @@
+/**
+ * Mirrors the API's identity contracts. Hand-written for P1; from P2 these are generated from
+ * /openapi/v1.json so a drifted client type becomes a build error rather than a runtime surprise.
+ */
+
+/**
+ * The seven actions of requirements §7. The numbers are the wire format (smallint), so they must
+ * match Domain/Identity/PermissionAction.cs exactly.
+ */
+export enum PermissionAction {
+  View = 1,
+  Create = 2,
+  Edit = 3,
+  Delete = 4,
+  Approve = 5,
+  Print = 6,
+  Export = 7,
+}
+
+export const ACTION_LABELS: Record<PermissionAction, string> = {
+  [PermissionAction.View]: "View",
+  [PermissionAction.Create]: "Create",
+  [PermissionAction.Edit]: "Edit",
+  [PermissionAction.Delete]: "Delete",
+  [PermissionAction.Approve]: "Approve",
+  [PermissionAction.Print]: "Print",
+  [PermissionAction.Export]: "Export",
+};
+
+/** Feature codes, mirroring Domain/Identity/FeatureCatalog.cs. */
+export const FEATURES = {
+  // P1 — settings
+  company: "settings.company",
+  branches: "settings.branches",
+  warehouses: "settings.warehouses",
+  users: "settings.users",
+  permissions: "settings.permissions",
+  settings: "settings.configuration",
+  numbering: "settings.numbering",
+  audit: "settings.audit",
+
+  // P2 — master data
+  products: "catalog.products",
+  categories: "catalog.categories",
+  brands: "catalog.brands",
+  customers: "catalog.customers",
+  suppliers: "catalog.suppliers",
+  taxRates: "catalog.tax_rates",
+  pricing: "catalog.pricing",
+  discounts: "catalog.discounts",
+  paymentMethods: "catalog.payment_methods",
+  currencies: "catalog.currencies",
+} as const;
+
+export interface Permission {
+  feature: string;
+  action: PermissionAction;
+}
+
+export interface CompanyMembership {
+  companyId: string;
+  companyName: string;
+  isDefault: boolean;
+  isOwner: boolean;
+}
+
+export interface CurrentUser {
+  userId: string;
+  email: string;
+  fullName: string;
+  activeCompanyId: string | null;
+  activeCompanyName: string | null;
+  isOwner: boolean;
+  permissions: Permission[];
+  accessibleBranchIds: string[];
+}
+
+export interface AuthResult {
+  accessToken: string;
+  refreshToken: string;
+  accessTokenExpiresAt: string;
+  user: CurrentUser;
+  companies: CompanyMembership[];
+}
+
+export interface Branch {
+  id: string;
+  name: string;
+  code: string;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  defaultWarehouseId: string | null;
+  defaultWarehouseName: string | null;
+  isDefault: boolean;
+  isActive: boolean;
+}
+
+export interface CompanyUser {
+  companyUserId: string;
+  userId: string;
+  fullName: string;
+  email: string;
+  phone: string | null;
+  isOwner: boolean;
+  isActive: boolean;
+  permissionCount: number;
+  branchIds: string[];
+}
+
+export interface PermissionGridAction {
+  action: PermissionAction;
+  supported: boolean;
+  granted: boolean;
+}
+
+export interface PermissionGridFeature {
+  feature: string;
+  module: string;
+  name: string;
+  displayOrder: number;
+  actions: PermissionGridAction[];
+}
+
+export interface PermissionGrid {
+  companyUserId: string;
+  userFullName: string;
+  userEmail: string;
+  isOwner: boolean;
+  features: PermissionGridFeature[];
+}
+
+export interface Setting {
+  key: string;
+  module: string;
+  name: string;
+  description: string | null;
+  dataType: number;
+  scope: number;
+  defaultValue: string;
+  effectiveValue: string;
+  isOverridden: boolean;
+  validFrom: string | null;
+}

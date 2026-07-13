@@ -1,0 +1,40 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+artifacts/
+TestResults/
+*.trx
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+.eslintcache
+
+# Environment and secrets — never commit these
+.env
+.env.local
+.env.*.local
+appsettings.Production.json
+appsettings.*.local.json
+*.pfx
+
+# Database
+database/backups/
+*.dump
+
+# Editors and OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
