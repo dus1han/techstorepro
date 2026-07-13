@@ -64,8 +64,8 @@ public class StockLedgerTests : IAsyncLifetime
         await using var seed = CreateContext(companyId: null);
         await seed.Database.MigrateAsync();
 
-        var a = new Company { Name = "Gulf Computers", BaseCurrency = "AED", TimeZone = "Asia/Dubai" };
-        var b = new Company { Name = "Sharjah IT", BaseCurrency = "AED", TimeZone = "Asia/Dubai" };
+        var a = new Company { Name = "Gulf Computers", Code = "GULF01", BaseCurrency = "AED", TimeZone = "Asia/Dubai" };
+        var b = new Company { Name = "Sharjah IT", Code = "SHJ01", BaseCurrency = "AED", TimeZone = "Asia/Dubai" };
         seed.Companies.AddRange(a, b);
 
         var branchA = new Branch { CompanyId = a.Id, Name = "A Main", Code = "AMAIN", IsDefault = true };
@@ -711,8 +711,9 @@ public class StockLedgerTests : IAsyncLifetime
     private sealed class StubUser : ICurrentUser
     {
         public Guid? UserId => null;
-        public string? Email => "tests@techstorepro.ae";
+        public string? Username => "tests";
         public bool IsAuthenticated => true;
+        public bool IsPlatformAdmin => false;
         public string? IpAddress => "203.0.113.7";
         public string? UserAgent => "tests";
     }

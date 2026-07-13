@@ -23,7 +23,9 @@ export function useApiQuery<T>(
   const { accessToken, user } = useAuth();
 
   return useQuery<T>({
-    queryKey: [...key, user?.activeCompanyId ?? null, query ?? null],
+    // The company is part of the cache key. Without it, a cached list from one company could be
+    // served under another — a server-side isolation guarantee undone by the client.
+    queryKey: [...key, user?.companyId ?? null, query ?? null],
     queryFn: () => api.get<T>(path, { token: accessToken!, query }),
     enabled: Boolean(accessToken) && (options?.enabled ?? true),
   });

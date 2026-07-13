@@ -47,12 +47,15 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Warehouse> Warehouses => Set<Warehouse>();
     public DbSet<BranchWarehouse> BranchWarehouses => Set<BranchWarehouse>();
     public DbSet<User> Users => Set<User>();
-    public DbSet<CompanyUser> CompanyUsers => Set<CompanyUser>();
-    public DbSet<CompanyUserBranch> CompanyUserBranches => Set<CompanyUserBranch>();
+    public DbSet<UserBranch> UserBranches => Set<UserBranch>();
     public DbSet<UserPermission> UserPermissions => Set<UserPermission>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<LoginHistory> LoginHistory => Set<LoginHistory>();
     public DbSet<Feature> Features => Set<Feature>();
+
+    // --- The platform, not a tenant ------------------------------------------------------------
+    public DbSet<PlatformAdmin> PlatformAdmins => Set<PlatformAdmin>();
+    public DbSet<PlatformRefreshToken> PlatformRefreshTokens => Set<PlatformRefreshToken>();
 
     // --- Configuration (P1) ------------------------------------------------------------------
     public DbSet<SettingDefinition> SettingDefinitions => Set<SettingDefinition>();
@@ -332,7 +335,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             {
                 CompanyId = companyId.Value,
                 UserId = _currentUser.UserId,
-                UserEmail = _currentUser.Email,
+                Username = _currentUser.Username,
                 EntityType = entry.Entity.GetType().Name,
                 EntityId = entity?.Id,
                 Action = action,

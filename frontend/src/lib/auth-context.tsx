@@ -13,7 +13,6 @@ import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import type {
   AuthResult,
-  CompanyMembership,
   CurrentUser,
   PermissionAction,
 } from "@/types/identity";
@@ -35,12 +34,11 @@ const REFRESH_TOKEN_KEY = "techstorepro.refresh";
 
 interface AuthState {
   user: CurrentUser | null;
-  companies: CompanyMembership[];
   accessToken: string | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  /** The whole login as one string: `ahmed@GULF01`. The company is half of it. */
+  login: (login: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  switchCompany: (companyId: string) => Promise<void>;
   /** Server-side is the real check; this only decides what to render. */
   can: (feature: string, action: PermissionAction) => boolean;
   /** Restores the session from the stored refresh token. Resolves to whether one was restored. */
@@ -53,19 +51,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
 
   const [user, setUser] = useState<CurrentUser | null>(null);
-  const [companies, setCompanies] = useState<CompanyMembership[]>([]);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const apply = useCallback((result: AuthResult) => {
     setAccessToken(result.accessToken);
-    setCompanies(result.companies);
     localStorage.setItem(REFRESH_TOKEN_KEY, result.refreshToken);
   }, []);
 
   const clear = useCallback(() => {
     setUser(null);
-    setCompanies([]);
     setAccessToken(null);
     localStorage.removeItem(REFRESH_TOKEN_KEY);
   }, []);
@@ -81,9 +76,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(
-    async (email: string, password: string) => {
+    async (login: string, password: string) => {
+      // One field: `ahmed@GULF01`. The server splits it — see LoginName.Parse. Sending an `email`
+      // here instead would typecheck perfectly and fail at runtime with a validation error, which is
+      // precisely the class of drift the OpenAPI codegen exists to kill.
       const result = await api.post<AuthResult>("api/v1/auth/login", {
-        body: { email, password },
+        body: { login, password },
       });
 
       apply(result);
@@ -108,24 +106,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.push("/login");
   }, [clear, router]);
 
-  const switchCompany = useCallback(
-    async (companyId: string) => {
-      if (!accessToken) return;
-
-      // Switching company is an auth operation: it mints a new token carrying the new company_id
-      // claim. It is not a request parameter, because a parameter could be edited to point at a
-      // company the user does not belong to.
-      const result = await api.post<AuthResult>("api/v1/auth/switch-company", {
-        token: accessToken,
-        body: { companyId },
-      });
-
-      apply(result);
-      await loadProfile(result.accessToken);
-      router.refresh();
-    },
-    [accessToken, apply, loadProfile, router],
-  );
+  // There is no switchCompany any more. A user belongs to exactly one company — the company is half
+  // of their login — so there is nothing to switch to. Somebody who genuinely works for two companies
+  // has two accounts, and signs in as the other one.
 
   /**
    * Returns whether a session was restored, rather than clearing state itself.
@@ -201,8 +184,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ user, companies, accessToken, isLoading, login, logout, switchCompany, can, refresh }),
-    [user, companies, accessToken, isLoading, login, logout, switchCompany, can, refresh],
+    () => ({ user, accessToken, isLoading, login, logout, can, refresh }),
+    [user, accessToken, isLoading, login, logout, can, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

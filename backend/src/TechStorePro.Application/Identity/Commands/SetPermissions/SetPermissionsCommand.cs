@@ -20,14 +20,14 @@ public record PermissionAssignment(string Feature, PermissionAction Action, bool
 /// </summary>
 [RequiresPermission(FeatureCatalog.Permissions, PermissionAction.Edit)]
 public record SetPermissionsCommand(
-    Guid CompanyUserId,
+    Guid UserId,
     IReadOnlyCollection<PermissionAssignment> Permissions) : IRequest;
 
 public class SetPermissionsCommandValidator : AbstractValidator<SetPermissionsCommand>
 {
     public SetPermissionsCommandValidator()
     {
-        RuleFor(x => x.CompanyUserId).NotEmpty();
+        RuleFor(x => x.UserId).NotEmpty();
 
         RuleForEach(x => x.Permissions).ChildRules(p =>
         {
@@ -62,16 +62,17 @@ public class SetPermissionsCommandHandler : IRequestHandler<SetPermissionsComman
 
     public async Task Handle(SetPermissionsCommand request, CancellationToken cancellationToken)
     {
-        var member = await _db.CompanyUsers
-            .Include(m => m.Permissions)
-            .Include(m => m.User)
-            .FirstOrDefaultAsync(m => m.Id == request.CompanyUserId, cancellationToken)
-            ?? throw new NotFoundException("Member", request.CompanyUserId);
+        // Tenant-filtered: a user id from another company simply does not resolve, so this cannot be
+        // used to edit a stranger's permissions by guessing their id.
+        var user = await _db.Users
+            .Include(u => u.Permissions)
+            .FirstOrDefaultAsync(u => u.Id == request.UserId, cancellationToken)
+            ?? throw new NotFoundException("User", request.UserId);
 
         // The owner's permissions are implicit and total. Allowing them to be edited would let an
-        // administrator strip the owner — including stripping themselves — and leave the company
-        // with nobody able to grant anything back. The recovery would be a manual database edit.
-        if (member.IsOwner)
+        // administrator strip the owner — including stripping themselves — and leave the company with
+        // nobody able to grant anything back. The recovery would be a manual database edit.
+        if (user.IsOwner)
         {
             throw new DomainException(
                 "The company owner holds every permission implicitly and cannot have them edited.");
@@ -82,7 +83,7 @@ public class SetPermissionsCommandHandler : IRequestHandler<SetPermissionsComman
             .Select(p => (p.Feature, p.Action))
             .ToHashSet();
 
-        var existing = member.Permissions.ToDictionary(p => (p.FeatureCode, p.Action));
+        var existing = user.Permissions.ToDictionary(p => (p.FeatureCode, p.Action));
 
         foreach (var (key, permission) in existing)
         {
@@ -102,7 +103,7 @@ public class SetPermissionsCommandHandler : IRequestHandler<SetPermissionsComman
 
             _db.UserPermissions.Add(new UserPermission
             {
-                CompanyUserId = member.Id,
+                UserId = user.Id,
                 FeatureCode = key.Item1,
                 Action = key.Item2,
                 Granted = true
@@ -111,9 +112,9 @@ public class SetPermissionsCommandHandler : IRequestHandler<SetPermissionsComman
 
         await _db.SaveChangesAsync(cancellationToken);
 
-        // The cached grants for this member are now wrong. Dropping them here is what makes a
-        // revocation take effect on the member's very next request, rather than up to two minutes
-        // later — which is the entire reason permissions are not carried in the token.
-        _permissions.InvalidateCache(member.Id);
+        // The cached grants for this user are now wrong. Dropping them here is what makes a revocation
+        // take effect on the user's very next request, rather than up to two minutes later — which is
+        // the entire reason permissions are not carried in the token.
+        _permissions.InvalidateCache(user.Id);
     }
 }

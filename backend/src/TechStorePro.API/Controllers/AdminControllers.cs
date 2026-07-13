@@ -92,23 +92,27 @@ public class UsersController : ApiControllerBase
     public async Task<ActionResult<IReadOnlyCollection<CompanyUserDto>>> List() =>
         Ok(await Mediator.Send(new GetCompanyUsersQuery()));
 
+    /// <summary>
+    /// A company admin adds one of their own staff. The username only has to be unique within this
+    /// company; they will sign in as <c>username@COMPANYCODE</c>.
+    /// </summary>
     [HttpPost]
-    public async Task<ActionResult<Guid>> Invite(InviteUserCommand command)
+    public async Task<ActionResult<Guid>> Create(CreateUserCommand command)
     {
         var id = await Mediator.Send(command);
         return CreatedAtAction(nameof(List), new { id }, id);
     }
 
-    /// <summary>The permission matrix for one member: every feature × every action.</summary>
-    [HttpGet("{companyUserId:guid}/permissions")]
-    public async Task<ActionResult<PermissionGridDto>> GetPermissions(Guid companyUserId) =>
-        Ok(await Mediator.Send(new GetPermissionGridQuery(companyUserId)));
+    /// <summary>The permission matrix for one user: every feature × every action.</summary>
+    [HttpGet("{userId:guid}/permissions")]
+    public async Task<ActionResult<PermissionGridDto>> GetPermissions(Guid userId) =>
+        Ok(await Mediator.Send(new GetPermissionGridQuery(userId)));
 
-    /// <summary>Replaces the member's grants with exactly the set supplied.</summary>
-    [HttpPut("{companyUserId:guid}/permissions")]
-    public async Task<IActionResult> SetPermissions(Guid companyUserId, SetPermissionsCommand command)
+    /// <summary>Replaces the user's grants with exactly the set supplied.</summary>
+    [HttpPut("{userId:guid}/permissions")]
+    public async Task<IActionResult> SetPermissions(Guid userId, SetPermissionsCommand command)
     {
-        if (companyUserId != command.CompanyUserId)
+        if (userId != command.UserId)
         {
             return BadRequest("Route id and body id differ.");
         }

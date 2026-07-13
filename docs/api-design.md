@@ -35,34 +35,78 @@ endpoint; platform staff touch tenant data only through explicit, audited impers
 
 ## 2. Tenancy on the wire
 
-The active company is a **claim inside the access token** (`company_id`), never a header or a
-query parameter. A header would let any authenticated caller read another company's data by
-editing the request; a claim cannot be changed without re-authenticating.
+The company is a **claim inside the access token** (`company_id`), never a header or a query
+parameter. A header would let any authenticated caller read another company's data by editing the
+request; a claim cannot be changed without re-authenticating.
 
-Switching company is therefore an auth operation, not a request parameter:
+The server resolves the company from the token (`TenantContext`), and the DbContext filters every
+query by it. No endpoint accepts a company id in its route.
 
-```
-POST /api/v1/auth/switch-company   { "companyId": "…" }  ->  a new access token
-```
+**There is no switch-company endpoint.** A user belongs to exactly one company (§45 D5), so there is
+nothing to switch to; somebody who works for two companies has two accounts.
 
-The server resolves the company from the token (`TenantContext`), and the DbContext filters
-every query by it. No endpoint accepts a company id in its route.
+### The two kinds of caller
+
+A **tenant user** carries `company_id`. A **platform operator** does not — they belong to no company.
+That absence is dangerous, because a null tenant switches the DbContext query filters **off**: a
+platform token reaching `/api/v1/products` would read every company on the platform at once.
+
+So both are asserted **positively**, by two policies, and neither is inferred from the other's absence:
+
+| Policy | Requires | Applies to |
+| --- | --- | --- |
+| `Tenant` | the `company_id` claim | every `/api/v1/*` feature endpoint |
+| `Platform` | the `platform_admin` claim | `/api/v1/platform/*` only |
+
+An authenticated token that has neither is refused rather than falling through.
 
 ## 3. Authentication
 
 JWT bearer, short-lived access token plus a rotating refresh token.
 
 ```
-POST /api/v1/auth/register          create a company and its first owner
-POST /api/v1/auth/login             -> { accessToken, refreshToken, companies[] }
+POST /api/v1/auth/login             { "login": "ahmed@GULF01", "password": "…" }
 POST /api/v1/auth/refresh           rotate; the old refresh token is revoked on use
 POST /api/v1/auth/logout            revoke the refresh token
-POST /api/v1/auth/switch-company    re-issue the access token for another membership
-GET  /api/v1/auth/me                current user, active company, permissions
+GET  /api/v1/auth/me                current user, their company, their permissions
 ```
 
-Access token claims: `sub` (user id), `email`, `company_id`. **There is no `role` claim** —
-requirements §7 forbids fixed roles, so nothing in the system resolves a role name.
+**The login is one field, `username@COMPANYCODE`.** A username is unique only *within* a company —
+two shops may each have an "admin" — so the login has to name its company. It is not two boxes: a
+separate "company code" field asks the user to know something they cannot discover, and a company
+dropdown would show every tenant on the platform to anyone who opened the page.
+
+Every credential failure — unknown company, unknown user, wrong password, malformed login — returns
+**the same message on the same timing path**. Told apart, they are a map of the platform.
+
+There is **no registration endpoint**. A company cannot bring itself into existence; TechStorePro
+onboards it (§2 below).
+
+Access token claims: `sub` (user id), `username`, `company_id`. **No `role` claim** — requirements §7
+forbids fixed roles, so nothing in the system resolves a role name. **No `email` claim** either: email
+is optional and non-unique now, so it cannot identify anybody.
+
+### The platform console (requirements §2)
+
+Separate table, separate login, separate refresh tokens — a shop's owner is not a diminished platform
+operator, they are not one at all. A platform admin signs in with a **bare username, no `@company`**.
+
+```
+POST   /api/v1/platform/auth/login       { "username": "…", "password": "…" }
+GET    /api/v1/platform/companies        every company on the platform
+POST   /api/v1/platform/companies        onboards a company AND its first user, in one transaction
+                                         -> { companyCode, ownerLogin: "admin@GULF01" }
+POST   /api/v1/platform/companies/{id}/suspend   nobody in it can sign in, including its owner
+POST   /api/v1/platform/companies/{id}/restore
+```
+
+`POST /platform/companies` is what replaced self-service registration. It returns the owner's full
+login, because that string is what the operator reads out to the customer and the one thing they
+cannot reconstruct from anywhere else.
+
+**Bootstrap:** the first platform admin is seeded from configuration (`Platform:FirstAdmin`) when the
+table is empty — otherwise nobody could create anybody and an empty database would be unusable. It
+never overwrites an existing admin.
 
 Authorisation is by **(feature, action)** — e.g. `sales.invoice` × `Approve` — granted per user.
 Permissions are deliberately **not** carried in the token:

@@ -22,8 +22,13 @@ public class LoginHistory : BaseEntity
     public Guid? UserId { get; set; }
     public User? User { get; set; }
 
-    /// <summary>What the caller actually typed. Never a password, of course.</summary>
-    public string Email { get; set; } = null!;
+    /// <summary>
+    /// What the caller actually typed, verbatim — <c>ahmed@GULF01</c>, or whatever nonsense they
+    /// submitted. Stored unparsed on purpose: the whole value of this row on a failed attempt is
+    /// seeing what someone was probing with, and normalising it away would destroy the evidence.
+    /// Never a password, of course.
+    /// </summary>
+    public string Login { get; set; } = null!;
 
     public Guid? CompanyId { get; set; }
 

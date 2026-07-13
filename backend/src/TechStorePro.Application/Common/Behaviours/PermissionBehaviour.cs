@@ -33,6 +33,20 @@ public class PermissionBehaviour<TRequest, TResponse> : IPipelineBehavior<TReque
         RequestHandlerDelegate<TResponse> next,
         CancellationToken cancellationToken)
     {
+        // Platform-only requests first, and they are exclusive: a request that demands a platform
+        // operator is never also satisfiable by a company's permission grid. A tenant user reaching
+        // one of these is refused here even if the HTTP-level policy were somehow misconfigured — two
+        // independent gates, because what is behind them is every company on the platform.
+        if (typeof(TRequest).GetCustomAttribute<RequiresPlatformAdminAttribute>(inherit: true) is not null)
+        {
+            if (!_currentUser.IsAuthenticated || !_currentUser.IsPlatformAdmin)
+            {
+                throw new ForbiddenException("This operation is restricted to TechStorePro platform administrators.");
+            }
+
+            return await next();
+        }
+
         var required = typeof(TRequest)
             .GetCustomAttributes<RequiresPermissionAttribute>(inherit: true)
             .ToArray();
@@ -45,6 +59,15 @@ public class PermissionBehaviour<TRequest, TResponse> : IPipelineBehavior<TReque
         if (!_currentUser.IsAuthenticated)
         {
             throw new UnauthorizedAccessException("Authentication is required.");
+        }
+
+        // A platform operator is not a super-user inside a shop. They have no company, so they have no
+        // permission grid, and every tenant-scoped query they issued would run with the filters off.
+        // Refusing here means the only way into a company's data is a login belonging to that company.
+        if (_currentUser.IsPlatformAdmin)
+        {
+            throw new ForbiddenException(
+                "A platform administrator cannot act inside a company. Sign in as a user of that company.");
         }
 
         foreach (var permission in required)

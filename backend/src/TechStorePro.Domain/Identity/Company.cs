@@ -9,6 +9,18 @@ namespace TechStorePro.Domain.Identity;
 public class Company : AuditableEntity, ISoftDeletable
 {
     public string Name { get; set; } = null!;
+
+    /// <summary>
+    /// The company's short code, and the half of a login that says <em>which</em> company: a user signs
+    /// in as <c>ahmed@GULF01</c>. Unique across the platform, because it is what disambiguates a
+    /// username that is only unique <em>within</em> a company — two shops may both have an "admin".
+    ///
+    /// Set by the platform admin when the company is created and never by the company itself: it is
+    /// half of every one of that company's logins, and letting a tenant rename it would lock its own
+    /// staff out.
+    /// </summary>
+    public string Code { get; set; } = null!;
+
     public string? LegalName { get; set; }
     public string? TaxNumber { get; set; }
     public string? RegistrationNumber { get; set; }
@@ -36,5 +48,12 @@ public class Company : AuditableEntity, ISoftDeletable
 
     public ICollection<Branch> Branches { get; set; } = [];
     public ICollection<Warehouse> Warehouses { get; set; } = [];
-    public ICollection<CompanyUser> Members { get; set; } = [];
+    public ICollection<User> Users { get; set; } = [];
+
+    /// <summary>
+    /// Normalises a code to its canonical form. Codes are compared and stored upper-case so that
+    /// <c>ahmed@gulf01</c> and <c>ahmed@GULF01</c> are the same login rather than one working and the
+    /// other failing for a reason nobody can see.
+    /// </summary>
+    public static string NormaliseCode(string code) => code.Trim().ToUpperInvariant();
 }

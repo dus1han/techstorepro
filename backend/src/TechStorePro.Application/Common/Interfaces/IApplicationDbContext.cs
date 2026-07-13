@@ -22,12 +22,17 @@ public interface IApplicationDbContext
     DbSet<Warehouse> Warehouses { get; }
     DbSet<BranchWarehouse> BranchWarehouses { get; }
     DbSet<User> Users { get; }
-    DbSet<CompanyUser> CompanyUsers { get; }
-    DbSet<CompanyUserBranch> CompanyUserBranches { get; }
+    DbSet<UserBranch> UserBranches { get; }
     DbSet<UserPermission> UserPermissions { get; }
     DbSet<RefreshToken> RefreshTokens { get; }
     DbSet<LoginHistory> LoginHistory { get; }
     DbSet<Feature> Features { get; }
+
+    // --- The platform, not a tenant ------------------------------------------------------------
+    // Deliberately not ITenantScoped: a platform admin belongs to no company. These are the only
+    // tables in the system that no query filter touches.
+    DbSet<PlatformAdmin> PlatformAdmins { get; }
+    DbSet<PlatformRefreshToken> PlatformRefreshTokens { get; }
 
     // --- Configuration (P1) ------------------------------------------------------------------
     DbSet<SettingDefinition> SettingDefinitions { get; }

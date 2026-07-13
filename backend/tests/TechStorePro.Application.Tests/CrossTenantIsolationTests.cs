@@ -46,8 +46,8 @@ public class CrossTenantIsolationTests : IAsyncLifetime
         await using var seed = CreateContext(companyId: null);
         await seed.Database.MigrateAsync();
 
-        var a = new Company { Name = "Gulf Computers", BaseCurrency = "AED", TimeZone = "Asia/Dubai" };
-        var b = new Company { Name = "Sharjah IT", BaseCurrency = "AED", TimeZone = "Asia/Dubai" };
+        var a = new Company { Name = "Gulf Computers", Code = "GULF01", BaseCurrency = "AED", TimeZone = "Asia/Dubai" };
+        var b = new Company { Name = "Sharjah IT", Code = "SHJ01", BaseCurrency = "AED", TimeZone = "Asia/Dubai" };
         seed.Companies.AddRange(a, b);
 
         var branchA = new Branch { CompanyId = a.Id, Name = "A Main", Code = "AMAIN", IsDefault = true };
@@ -415,11 +415,12 @@ public class CrossTenantIsolationTests : IAsyncLifetime
     {
         var userId = Guid.NewGuid();
 
-        await using var asA = CreateContext(_companyA, userId, "maryam@gulfcomputers.ae");
+        await using var asA = CreateContext(_companyA, userId, "maryam");
 
         asA.Users.Add(new User
         {
-            Email = "samir@gulfcomputers.ae",
+            CompanyId = _companyA,
+            Username = "samir",
             FullName = "Samir Khan",
             PasswordHash = "1.210000.SALTSALTSALTSALT==.HASHHASHHASHHASHHASHHASHHASHHASH="
         });
@@ -428,8 +429,10 @@ public class CrossTenantIsolationTests : IAsyncLifetime
 
         var entry = await asA.AuditLogs.FirstAsync(a => a.EntityType == nameof(User));
 
-        entry.UserEmail.Should().Be("maryam@gulfcomputers.ae");
-        entry.NewValues.Should().Contain("samir@gulfcomputers.ae");
+        // By username, not by email: email is optional and non-unique now, so it could not answer
+        // "who did this" — it might be blank, or the same address for two people.
+        entry.Username.Should().Be("maryam");
+        entry.NewValues.Should().Contain("samir");
 
         // An audit trail that faithfully records every password hash a user has ever had is a
         // credential history, not an audit log.
@@ -437,10 +440,75 @@ public class CrossTenantIsolationTests : IAsyncLifetime
         entry.NewValues.Should().NotContain("1.210000.");
     }
 
+    [Fact]
+    public async Task Two_companies_may_each_have_a_user_called_admin()
+    {
+        // The whole reason a username is scoped to its company. A shop names its manager "admin"
+        // without being told that an invisible stranger already took the name — being told would be
+        // both a terrible experience and a way to enumerate the platform's tenants.
+        await using var asA = CreateContext(_companyA);
+        await using var asB = CreateContext(_companyB);
+
+        asA.Users.Add(new User
+        {
+            CompanyId = _companyA,
+            Username = "admin",
+            FullName = "A's admin",
+            PasswordHash = "x"
+        });
+
+        await asA.SaveChangesAsync();
+
+        asB.Users.Add(new User
+        {
+            CompanyId = _companyB,
+            Username = "admin",
+            FullName = "B's admin",
+            PasswordHash = "x"
+        });
+
+        var act = async () => await asB.SaveChangesAsync();
+
+        await act.Should().NotThrowAsync("a username is unique within a company, not across the platform");
+
+        // And they are two different people, each invisible to the other.
+        (await asA.Users.CountAsync(u => u.Username == "admin")).Should().Be(1);
+        (await asB.Users.CountAsync(u => u.Username == "admin")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task The_same_username_twice_in_one_company_is_refused()
+    {
+        await using var asA = CreateContext(_companyA);
+
+        asA.Users.Add(new User
+        {
+            CompanyId = _companyA,
+            Username = "ahmed",
+            FullName = "Ahmed One",
+            PasswordHash = "x"
+        });
+
+        await asA.SaveChangesAsync();
+
+        asA.Users.Add(new User
+        {
+            CompanyId = _companyA,
+            Username = "ahmed",
+            FullName = "Ahmed Two",
+            PasswordHash = "x"
+        });
+
+        var act = async () => await asA.SaveChangesAsync();
+
+        // Otherwise 'ahmed@GULF01' would identify two people and the login could not resolve either.
+        await act.Should().ThrowAsync<DbUpdateException>();
+    }
+
     private ApplicationDbContext CreateContext(
         Guid? companyId,
         Guid? userId = null,
-        string? email = null)
+        string? username = null)
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseNpgsql(_postgres.GetConnectionString(), npgsql =>
@@ -450,7 +518,7 @@ public class CrossTenantIsolationTests : IAsyncLifetime
         return new ApplicationDbContext(
             options,
             new StubTenant(companyId),
-            new StubUser(userId, email),
+            new StubUser(userId, username),
             new StubClock());
     }
 
@@ -460,11 +528,12 @@ public class CrossTenantIsolationTests : IAsyncLifetime
         public bool HasTenant => CompanyId.HasValue;
     }
 
-    private sealed class StubUser(Guid? userId, string? email) : ICurrentUser
+    private sealed class StubUser(Guid? userId, string? username) : ICurrentUser
     {
         public Guid? UserId { get; } = userId;
-        public string? Email { get; } = email;
+        public string? Username { get; } = username;
         public bool IsAuthenticated => UserId.HasValue;
+        public bool IsPlatformAdmin => false;
         public string? IpAddress => "203.0.113.7";
         public string? UserAgent => "tests";
     }

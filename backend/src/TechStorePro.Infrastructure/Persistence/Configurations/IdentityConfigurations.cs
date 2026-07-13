@@ -11,6 +11,7 @@ public class CompanyConfiguration : IEntityTypeConfiguration<Company>
         builder.ToTable("companies");
 
         builder.Property(c => c.Name).HasMaxLength(200).IsRequired();
+        builder.Property(c => c.Code).HasMaxLength(20).IsRequired();
         builder.Property(c => c.LegalName).HasMaxLength(200);
         builder.Property(c => c.TaxNumber).HasMaxLength(50);
         builder.Property(c => c.RegistrationNumber).HasMaxLength(50);
@@ -21,6 +22,12 @@ public class CompanyConfiguration : IEntityTypeConfiguration<Company>
         builder.Property(c => c.Phone).HasMaxLength(50);
         builder.Property(c => c.Website).HasMaxLength(256);
         builder.Property(c => c.DeletedReason).HasMaxLength(500);
+
+        // Unique across the platform, and unfiltered by is_deleted on purpose: the code is half of
+        // every login this company's staff type. Freeing a retired company's code for reuse would let
+        // a new tenant inherit the logins of a dead one — 'ahmed@GULF01' would resolve to a different
+        // Ahmed, at a different company, and nobody would be told.
+        builder.HasIndex(c => c.Code).IsUnique();
 
         builder.HasIndex(c => c.IsActive);
     }
@@ -100,58 +107,46 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
     {
         builder.ToTable("users");
 
-        // citext: "Ali@Shop.ae" and "ali@shop.ae" are the same person, and a case-sensitive unique
-        // index would happily let both exist.
-        builder.Property(u => u.Email).HasColumnType("citext").HasMaxLength(256).IsRequired();
+        // citext: "Ahmed" and "ahmed" are the same login, and a case-sensitive unique index would
+        // happily let both exist — two accounts, one name, and no way to tell which one you are.
+        builder.Property(u => u.Username).HasColumnType("citext").HasMaxLength(100).IsRequired();
+
+        // Optional and not unique. Login is by username; this is a contact address, and a shop
+        // assistant may simply not have one.
+        builder.Property(u => u.Email).HasColumnType("citext").HasMaxLength(256);
+
         builder.Property(u => u.PasswordHash).HasMaxLength(500).IsRequired();
         builder.Property(u => u.FullName).HasMaxLength(200).IsRequired();
         builder.Property(u => u.Phone).HasMaxLength(50);
         builder.Property(u => u.DeletedReason).HasMaxLength(500);
 
-        // Unique across the whole platform, not per company — users are global by design.
-        builder.HasIndex(u => u.Email).IsUnique();
+        // Unique *within a company*, not across the platform. That is the whole point: a shop names
+        // its manager "admin" without being told an invisible stranger already took it.
+        //
+        // Filtered on is_deleted, like every other natural key here: a retired user frees their
+        // username, so a mistyped name is not held hostage forever by a soft-deleted row.
+        builder.HasIndex(u => new { u.CompanyId, u.Username })
+            .IsUnique()
+            .HasFilter("is_deleted = false");
     }
 }
 
-public class CompanyUserConfiguration : IEntityTypeConfiguration<CompanyUser>
+public class UserBranchConfiguration : IEntityTypeConfiguration<UserBranch>
 {
-    public void Configure(EntityTypeBuilder<CompanyUser> builder)
+    public void Configure(EntityTypeBuilder<UserBranch> builder)
     {
-        builder.ToTable("company_users");
+        builder.ToTable("user_branches");
 
-        builder.Property(cu => cu.DeletedReason).HasMaxLength(500);
+        builder.HasIndex(ub => new { ub.CompanyId, ub.UserId, ub.BranchId }).IsUnique();
 
-        builder.HasIndex(cu => new { cu.CompanyId, cu.UserId }).IsUnique();
-        builder.HasIndex(cu => cu.UserId);
-
-        builder.HasOne(cu => cu.Company)
-            .WithMany(c => c.Members)
-            .HasForeignKey(cu => cu.CompanyId)
+        builder.HasOne(ub => ub.User)
+            .WithMany(u => u.BranchAccess)
+            .HasForeignKey(ub => ub.UserId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        builder.HasOne(cu => cu.User)
-            .WithMany(u => u.Memberships)
-            .HasForeignKey(cu => cu.UserId)
-            .OnDelete(DeleteBehavior.Cascade);
-    }
-}
-
-public class CompanyUserBranchConfiguration : IEntityTypeConfiguration<CompanyUserBranch>
-{
-    public void Configure(EntityTypeBuilder<CompanyUserBranch> builder)
-    {
-        builder.ToTable("company_user_branches");
-
-        builder.HasIndex(cub => new { cub.CompanyUserId, cub.BranchId }).IsUnique();
-
-        builder.HasOne(cub => cub.CompanyUser)
-            .WithMany(cu => cu.BranchAccess)
-            .HasForeignKey(cub => cub.CompanyUserId)
-            .OnDelete(DeleteBehavior.Cascade);
-
-        builder.HasOne(cub => cub.Branch)
+        builder.HasOne(ub => ub.Branch)
             .WithMany()
-            .HasForeignKey(cub => cub.BranchId)
+            .HasForeignKey(ub => ub.BranchId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }
@@ -165,15 +160,15 @@ public class UserPermissionConfiguration : IEntityTypeConfiguration<UserPermissi
         builder.Property(p => p.FeatureCode).HasMaxLength(100).IsRequired();
         builder.Property(p => p.Action).HasConversion<short>();
 
-        // One row per (member, feature, action). The uniqueness is what makes a grant idempotent —
+        // One row per (user, feature, action). The uniqueness is what makes a grant idempotent —
         // ticking a box twice must not create two grants that then disagree when one is revoked.
         // Safe as an unfiltered unique index only because grants are hard-deleted: a soft-deleted
         // row would keep occupying this key and block the permission from ever being re-granted.
-        builder.HasIndex(p => new { p.CompanyUserId, p.FeatureCode, p.Action }).IsUnique();
+        builder.HasIndex(p => new { p.UserId, p.FeatureCode, p.Action }).IsUnique();
 
-        builder.HasOne(p => p.CompanyUser)
-            .WithMany(cu => cu.Permissions)
-            .HasForeignKey(p => p.CompanyUserId)
+        builder.HasOne(p => p.User)
+            .WithMany(u => u.Permissions)
+            .HasForeignKey(p => p.UserId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }
@@ -189,11 +184,50 @@ public class RefreshTokenConfiguration : IEntityTypeConfiguration<RefreshToken>
         builder.Property(t => t.IpAddress).HasMaxLength(64);
 
         builder.HasIndex(t => t.TokenHash).IsUnique();
-        builder.HasIndex(t => new { t.UserId, t.CompanyId });
+        builder.HasIndex(t => t.UserId);
 
         builder.HasOne(t => t.User)
             .WithMany()
             .HasForeignKey(t => t.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public class PlatformAdminConfiguration : IEntityTypeConfiguration<PlatformAdmin>
+{
+    public void Configure(EntityTypeBuilder<PlatformAdmin> builder)
+    {
+        builder.ToTable("platform_admins");
+
+        builder.Property(a => a.Username).HasColumnType("citext").HasMaxLength(100).IsRequired();
+        builder.Property(a => a.PasswordHash).HasMaxLength(500).IsRequired();
+        builder.Property(a => a.FullName).HasMaxLength(200).IsRequired();
+        builder.Property(a => a.Email).HasColumnType("citext").HasMaxLength(256);
+        builder.Property(a => a.DeletedReason).HasMaxLength(500);
+
+        // Unique platform-wide — there is only one platform, so there is nothing to scope it to.
+        builder.HasIndex(a => a.Username)
+            .IsUnique()
+            .HasFilter("is_deleted = false");
+    }
+}
+
+public class PlatformRefreshTokenConfiguration : IEntityTypeConfiguration<PlatformRefreshToken>
+{
+    public void Configure(EntityTypeBuilder<PlatformRefreshToken> builder)
+    {
+        builder.ToTable("platform_refresh_tokens");
+
+        builder.Property(t => t.TokenHash).HasMaxLength(128).IsRequired();
+        builder.Property(t => t.DeviceInfo).HasMaxLength(500);
+        builder.Property(t => t.IpAddress).HasMaxLength(64);
+
+        builder.HasIndex(t => t.TokenHash).IsUnique();
+        builder.HasIndex(t => t.PlatformAdminId);
+
+        builder.HasOne(t => t.PlatformAdmin)
+            .WithMany(a => a.RefreshTokens)
+            .HasForeignKey(t => t.PlatformAdminId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }
@@ -204,14 +238,14 @@ public class LoginHistoryConfiguration : IEntityTypeConfiguration<LoginHistory>
     {
         builder.ToTable("login_history");
 
-        builder.Property(h => h.Email).HasColumnType("citext").HasMaxLength(256).IsRequired();
+        builder.Property(h => h.Login).HasColumnType("citext").HasMaxLength(360).IsRequired();
         builder.Property(h => h.Result).HasConversion<short>();
         builder.Property(h => h.FailureReason).HasMaxLength(200);
         builder.Property(h => h.IpAddress).HasMaxLength(64);
         builder.Property(h => h.UserAgent).HasMaxLength(500);
         builder.Property(h => h.DeviceInfo).HasMaxLength(500);
 
-        builder.HasIndex(h => new { h.Email, h.At });
+        builder.HasIndex(h => new { h.Login, h.At });
         builder.HasIndex(h => new { h.UserId, h.At });
 
         builder.HasOne(h => h.User)

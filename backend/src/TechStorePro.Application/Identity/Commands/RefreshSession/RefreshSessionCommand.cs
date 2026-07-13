@@ -68,7 +68,7 @@ public class RefreshSessionCommandHandler : IRequestHandler<RefreshSessionComman
             throw new UnauthorizedAccessException("Refresh token has expired.");
         }
 
-        var result = await _sessions.IssueAsync(stored.UserId, stored.CompanyId, cancellationToken);
+        var result = await _sessions.IssueAsync(stored.UserId, cancellationToken);
 
         // Rotate: the token just used is dead the moment its replacement exists.
         stored.RevokedAt = now;
@@ -77,13 +77,14 @@ public class RefreshSessionCommandHandler : IRequestHandler<RefreshSessionComman
         return result;
     }
 
-    /// <summary>Revokes every live token for this user in this company.</summary>
+    /// <summary>
+    /// Revokes every live token for this user. It no longer has to match on company as well: a user
+    /// belongs to exactly one, so all of their tokens are for it.
+    /// </summary>
     private async Task RevokeChainAsync(RefreshToken compromised, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var live = await _db.IgnoringTenantFilter<RefreshToken>()
-            .Where(t => t.UserId == compromised.UserId
-                        && t.CompanyId == compromised.CompanyId
-                        && t.RevokedAt == null)
+            .Where(t => t.UserId == compromised.UserId && t.RevokedAt == null)
             .ToListAsync(cancellationToken);
 
         foreach (var token in live)

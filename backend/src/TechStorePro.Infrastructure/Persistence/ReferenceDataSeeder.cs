@@ -1,7 +1,9 @@
+using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace TechStorePro.Infrastructure.Persistence;
@@ -23,11 +25,19 @@ namespace TechStorePro.Infrastructure.Persistence;
 public class ReferenceDataSeeder
 {
     private readonly ApplicationDbContext _db;
+    private readonly IPasswordHasher _hasher;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<ReferenceDataSeeder> _logger;
 
-    public ReferenceDataSeeder(ApplicationDbContext db, ILogger<ReferenceDataSeeder> logger)
+    public ReferenceDataSeeder(
+        ApplicationDbContext db,
+        IPasswordHasher hasher,
+        IConfiguration configuration,
+        ILogger<ReferenceDataSeeder> logger)
     {
         _db = db;
+        _hasher = hasher;
+        _configuration = configuration;
         _logger = logger;
     }
 
@@ -36,8 +46,72 @@ public class ReferenceDataSeeder
         await SeedFeaturesAsync(cancellationToken);
         await SeedSettingDefinitionsAsync(cancellationToken);
         await SeedCurrenciesAsync(cancellationToken);
+        await SeedFirstPlatformAdminAsync(cancellationToken);
 
         await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Creates the very first platform operator, from configuration, if there are none at all.
+    ///
+    /// <b>This exists because the system now has a bootstrap problem.</b> Companies are onboarded by a
+    /// platform admin, and platform admins are created by other platform admins — so with an empty
+    /// table, nobody can create anybody, and the product cannot be used at all. Something has to make
+    /// the first one, and configuration is the least-bad place: it is the one input that is already
+    /// trusted at start-up and already comes from a secret store in a real environment.
+    ///
+    /// It runs only when the table is <em>empty</em>. It is not an upsert and it will not resurrect a
+    /// deleted admin or reset a password — a seeder that quietly rewrote a live credential on every
+    /// deploy would be a backdoor with a changelog entry.
+    /// </summary>
+    private async Task SeedFirstPlatformAdminAsync(CancellationToken cancellationToken)
+    {
+        if (await _db.PlatformAdmins.IgnoreQueryFilters().AnyAsync(cancellationToken))
+        {
+            return;
+        }
+
+        var section = _configuration.GetSection("Platform:FirstAdmin");
+
+        var username = section["Username"];
+        var password = section["Password"];
+        var fullName = section["FullName"] ?? "Platform Administrator";
+
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+        {
+            _logger.LogWarning(
+                "There is no platform administrator and none is configured, so no company can be "
+                + "onboarded. Set Platform:FirstAdmin:Username and Platform:FirstAdmin:Password "
+                + "(via user-secrets or the environment) and restart.");
+            return;
+        }
+
+        if (password.Length < 12)
+        {
+            // Refuse rather than create a weak one. This account can reach every company on the
+            // platform; a short password on it is not a small problem.
+            throw new InvalidOperationException(
+                "Platform:FirstAdmin:Password must be at least 12 characters. This account can reach "
+                + "every company on the platform.");
+        }
+
+        _db.PlatformAdmins.Add(new PlatformAdmin
+        {
+            Username = User.NormaliseUsername(username),
+            FullName = fullName,
+            Email = section["Email"],
+            PasswordHash = _hasher.Hash(password),
+            IsActive = true,
+
+            // Whoever put it in configuration knows it, and configuration is not where a live
+            // credential should keep living.
+            MustChangePassword = true
+        });
+
+        _logger.LogWarning(
+            "Created the first platform administrator '{Username}' from configuration. Change its "
+            + "password and remove it from configuration.",
+            username);
     }
 
     /// <summary>

@@ -1,9 +1,11 @@
 using System.Text;
+using TechStorePro.API.Controllers;
 using TechStorePro.API.Middleware;
 using TechStorePro.API.Services;
 using TechStorePro.Application;
 using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Infrastructure;
+using TechStorePro.Infrastructure.Identity;
 using TechStorePro.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -52,7 +54,22 @@ builder.Services
 // Authorisation is by (feature, action), evaluated in the MediatR pipeline against the database —
 // see PermissionBehaviour. Nothing is policy- or role-based here, because requirements §7 forbids
 // fixed roles: [Authorize] on the controller means "authenticated", and nothing more.
-builder.Services.AddAuthorization();
+// Two kinds of caller, told apart by a claim each — never by the absence of the other's.
+//
+// A platform admin's token has no company_id, and a null tenant switches the DbContext query filters
+// off. So "Tenant" demands the company claim positively: an authenticated token that merely lacks a
+// company is refused rather than falling through into a request that would read every company at once.
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(
+        AuthorizationPolicies.Tenant,
+        policy => policy.RequireAuthenticatedUser().RequireClaim(TokenService.CompanyIdClaim));
+
+    options.AddPolicy(
+        AuthorizationPolicies.Platform,
+        policy => policy.RequireAuthenticatedUser().RequireClaim(TokenService.PlatformAdminClaim, "true"));
+});
+
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks();

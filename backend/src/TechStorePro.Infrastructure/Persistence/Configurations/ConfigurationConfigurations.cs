@@ -65,7 +65,7 @@ public class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
 
         builder.Property(a => a.EntityType).HasMaxLength(100).IsRequired();
         builder.Property(a => a.Action).HasConversion<short>();
-        builder.Property(a => a.UserEmail).HasMaxLength(256);
+        builder.Property(a => a.Username).HasMaxLength(100);
         builder.Property(a => a.IpAddress).HasMaxLength(64);
         builder.Property(a => a.Summary).HasMaxLength(1000);
 

@@ -41,8 +41,12 @@ public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<Applicati
     private sealed class DesignTimeCurrentUser : ICurrentUser
     {
         public Guid? UserId => null;
-        public string? Email => null;
+        public string? Username => null;
         public bool IsAuthenticated => false;
+
+        /// <summary>False, and not "true because there is no company". Design-time is not privileged.</summary>
+        public bool IsPlatformAdmin => false;
+
         public string? IpAddress => null;
         public string? UserAgent => null;
     }

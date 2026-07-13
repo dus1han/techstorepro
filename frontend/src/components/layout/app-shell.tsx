@@ -125,7 +125,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center justify-between gap-4 border-b border-slate-200 px-6 dark:border-slate-800">
-          <CompanySwitcher />
+          <CompanyBadge />
 
           <div className="flex items-center gap-4">
             <div className="text-right">
@@ -158,33 +158,29 @@ export function AppShell({ children }: { children: ReactNode }) {
 }
 
 /**
- * Switching company re-authenticates: the API mints a new token carrying the new company_id claim.
- * The tenant is never a header or a dropdown value the client sends with each request — that could
- * be edited to point at a company the user has no membership of.
+ * The company the user works for, shown rather than chosen.
+ *
+ * This used to be a switcher. It cannot be one any more: a user belongs to exactly one company —
+ * the company is half of their login — so there is nothing to switch between. Somebody who genuinely
+ * works for two companies has two accounts and signs in as the other one.
  */
-function CompanySwitcher() {
-  const { companies, user, switchCompany } = useAuth();
+function CompanyBadge() {
+  const { user } = useAuth();
 
-  if (companies.length <= 1) {
-    return (
-      <p className="text-sm font-medium">{user?.activeCompanyName ?? "—"}</p>
-    );
+  if (!user) {
+    return <p className="text-sm font-medium">—</p>;
   }
 
   return (
-    <label className="flex items-center gap-2 text-sm">
-      <span className="text-slate-500">Company</span>
-      <select
-        value={user?.activeCompanyId ?? ""}
-        onChange={(event) => void switchCompany(event.target.value)}
-        className="rounded-md border border-slate-200 bg-transparent px-2 py-1.5 text-sm dark:border-slate-700"
-      >
-        {companies.map((company) => (
-          <option key={company.companyId} value={company.companyId}>
-            {company.companyName}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div className="text-sm">
+      <p className="font-medium">{user.companyName ?? "—"}</p>
+      {user.companyCode && (
+        // Worth showing: it is the half of their login they are most likely to forget, and the one
+        // thing they cannot look up anywhere else.
+        <p className="font-mono text-xs text-slate-500">
+          {user.username}@{user.companyCode}
+        </p>
+      )}
+    </div>
   );
 }

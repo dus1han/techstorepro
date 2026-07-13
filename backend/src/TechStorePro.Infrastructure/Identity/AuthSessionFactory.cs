@@ -9,8 +9,12 @@ using Microsoft.EntityFrameworkCore;
 namespace TechStorePro.Infrastructure.Identity;
 
 /// <summary>
-/// The one place a signed-in session is minted. Login, refresh and switch-company all end here, so
-/// the claim set, the token lifetimes and the rotation rules cannot drift apart between them.
+/// The one place a signed-in session is minted. Login and refresh both end here, so the claim set, the
+/// token lifetimes and the rotation rules cannot drift apart between them.
+///
+/// There is no company argument any more. A user belongs to exactly one company, so the session's
+/// company is <c>user.CompanyId</c> and nothing else — passing it in would invite a caller to pass the
+/// wrong one.
 /// </summary>
 public class AuthSessionFactory : IAuthSessionFactory
 {
@@ -34,25 +38,14 @@ public class AuthSessionFactory : IAuthSessionFactory
         _caller = caller;
     }
 
-    public async Task<AuthResult> IssueAsync(
-        Guid userId,
-        Guid companyId,
-        CancellationToken cancellationToken = default)
+    public async Task<AuthResult> IssueAsync(Guid userId, CancellationToken cancellationToken = default)
     {
+        // The tenant filter is bypassed deliberately: this runs *before* the token that would name the
+        // company exists, so there is no tenant on the request to filter by yet.
         var user = await _db.IgnoringTenantFilter<User>()
+            .Include(u => u.Company)
             .FirstOrDefaultAsync(u => u.Id == userId, cancellationToken)
             ?? throw new NotFoundException(nameof(User), userId);
-
-        // Every membership, so the client can render the company switcher. The tenant filter is
-        // bypassed deliberately: the caller's *current* token may name a different company, or none
-        // at all if this is a fresh login.
-        var memberships = await _db.IgnoringTenantFilter<CompanyUser>()
-            .Include(m => m.Company)
-            .Where(m => m.UserId == userId && m.IsActive && !m.IsDeleted)
-            .ToListAsync(cancellationToken);
-
-        var active = memberships.FirstOrDefault(m => m.CompanyId == companyId)
-            ?? throw new UnauthorizedAccessException("You are not a member of that company.");
 
         // Token lifetimes are configuration, not constants (requirements §11). A company that wants
         // 15-minute access tokens should not need a deploy to get them.
@@ -61,13 +54,12 @@ public class AuthSessionFactory : IAuthSessionFactory
 
         var now = _clock.UtcNow;
 
-        var accessToken = _tokens.CreateAccessToken(user.Id, user.Email, companyId, accessMinutes);
+        var accessToken = _tokens.CreateAccessToken(user.Id, user.Username, user.CompanyId, accessMinutes);
         var (refreshToken, refreshHash) = _tokens.CreateRefreshToken();
 
         _db.RefreshTokens.Add(new RefreshToken
         {
             UserId = user.Id,
-            CompanyId = companyId,
             TokenHash = refreshHash,
             CreatedAt = now,
             ExpiresAt = now.AddDays(refreshDays),
@@ -77,29 +69,59 @@ public class AuthSessionFactory : IAuthSessionFactory
 
         await _db.SaveChangesAsync(cancellationToken);
 
-        // Permissions are resolved fresh by GET /auth/me rather than being stuffed in here: this
-        // runs before the new company_id claim exists on the request, so IPermissionService would
-        // still be answering for the *previous* company.
+        // Permissions are resolved fresh by GET /auth/me rather than being stuffed in here: this runs
+        // before the new company_id claim exists on the request, so IPermissionService would still be
+        // answering for whatever company the *previous* token named — or for none at all.
         var profile = new CurrentUserDto(
             user.Id,
-            user.Email,
+            user.Username,
             user.FullName,
-            companyId,
-            active.Company.Name,
-            active.IsOwner,
+            user.CompanyId,
+            user.Company.Name,
+            user.Company.Code,
+            user.IsOwner,
             [],
             []);
 
-        var companies = memberships
-            .Where(m => m.Company is { IsActive: true, IsDeleted: false })
-            .Select(m => new CompanyMembershipDto(m.CompanyId, m.Company.Name, m.IsDefault, m.IsOwner))
-            .ToList();
+        return new AuthResult(accessToken, refreshToken, now.AddMinutes(accessMinutes), profile);
+    }
 
-        return new AuthResult(
+    public async Task<PlatformAuthResult> IssuePlatformAsync(
+        Guid platformAdminId,
+        CancellationToken cancellationToken = default)
+    {
+        var admin = await _db.PlatformAdmins
+            .FirstOrDefaultAsync(a => a.Id == platformAdminId, cancellationToken)
+            ?? throw new NotFoundException(nameof(PlatformAdmin), platformAdminId);
+
+        // Fixed, not read from Settings. ISettingsProvider resolves per company and a platform admin
+        // has none — but the deeper reason is that a tenant must not get to choose how long the
+        // platform operator's session lives. Shorter than a shop's, because this credential can reach
+        // every company on the platform.
+        const int accessMinutes = 15;
+        const int refreshDays = 1;
+
+        var now = _clock.UtcNow;
+
+        var accessToken = _tokens.CreatePlatformAccessToken(admin.Id, admin.Username, accessMinutes);
+        var (refreshToken, refreshHash) = _tokens.CreateRefreshToken();
+
+        _db.PlatformRefreshTokens.Add(new PlatformRefreshToken
+        {
+            PlatformAdminId = admin.Id,
+            TokenHash = refreshHash,
+            CreatedAt = now,
+            ExpiresAt = now.AddDays(refreshDays),
+            IpAddress = _caller.IpAddress,
+            DeviceInfo = _caller.UserAgent
+        });
+
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return new PlatformAuthResult(
             accessToken,
             refreshToken,
             now.AddMinutes(accessMinutes),
-            profile,
-            companies);
+            new PlatformAdminDto(admin.Id, admin.Username, admin.FullName));
     }
 }

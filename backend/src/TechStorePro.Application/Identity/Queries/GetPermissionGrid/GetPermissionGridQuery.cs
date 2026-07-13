@@ -8,15 +8,21 @@ using Microsoft.EntityFrameworkCore;
 namespace TechStorePro.Application.Identity.Queries.GetPermissionGrid;
 
 /// <summary>
-/// The permission screen for one member: every feature, every action it supports, and whether this
-/// member holds it. This is the whole of requirements §7's UI contract.
+/// The permission screen for one user: every feature, every action it supports, and whether this user
+/// holds it. This is the whole of requirements §7's UI contract.
 /// </summary>
-public record GetPermissionGridQuery(Guid CompanyUserId) : IRequest<PermissionGridDto>;
+/// <remarks>
+/// The <c>[RequiresPermission]</c> below was missing, which meant any authenticated user could read any
+/// colleague's permission grid — a map of who in the company can approve a discount or write off stock,
+/// handed to whoever asked. It is a read, so it is gated on View rather than Edit.
+/// </remarks>
+[RequiresPermission(FeatureCatalog.Permissions, PermissionAction.View)]
+public record GetPermissionGridQuery(Guid UserId) : IRequest<PermissionGridDto>;
 
 public record PermissionGridDto(
-    Guid CompanyUserId,
+    Guid UserId,
     string UserFullName,
-    string UserEmail,
+    string Username,
     bool IsOwner,
     IReadOnlyCollection<PermissionGridFeatureDto> Features);
 
@@ -42,15 +48,14 @@ public class GetPermissionGridQueryHandler : IRequestHandler<GetPermissionGridQu
         GetPermissionGridQuery request,
         CancellationToken cancellationToken)
     {
-        // Tenant-filtered: asking for a member of another company gets a 404, not a 403. A 403 would
+        // Tenant-filtered: asking for a user of another company gets a 404, not a 403. A 403 would
         // confirm the id is real (api-design.md §4).
-        var member = await _db.CompanyUsers
-            .Include(m => m.User)
-            .Include(m => m.Permissions)
-            .FirstOrDefaultAsync(m => m.Id == request.CompanyUserId, cancellationToken)
-            ?? throw new NotFoundException("Member", request.CompanyUserId);
+        var user = await _db.Users
+            .Include(u => u.Permissions)
+            .FirstOrDefaultAsync(u => u.Id == request.UserId, cancellationToken)
+            ?? throw new NotFoundException("User", request.UserId);
 
-        var held = member.Permissions
+        var held = user.Permissions
             .Where(p => p.Granted)
             .Select(p => (p.FeatureCode, p.Action))
             .ToHashSet();
@@ -70,19 +75,19 @@ public class GetPermissionGridQueryHandler : IRequestHandler<GetPermissionGridQu
                         // granting Approve on a feature with no approval step would be a permission
                         // nothing could ever check.
                         Supported: f.SupportedActions.Contains(action),
-                        // The owner holds everything implicitly, so the grid shows it as fully
-                        // ticked even though no rows exist. Anything else would be a lie.
-                        Granted: member.IsOwner
+                        // The owner holds everything implicitly, so the grid shows it as fully ticked
+                        // even though no rows exist. Anything else would be a lie.
+                        Granted: user.IsOwner
                             ? f.SupportedActions.Contains(action)
                             : held.Contains((f.Code, action))))
                     .ToList()))
             .ToList();
 
         return new PermissionGridDto(
-            member.Id,
-            member.User.FullName,
-            member.User.Email,
-            member.IsOwner,
+            user.Id,
+            user.FullName,
+            user.Username,
+            user.IsOwner,
             features);
     }
 }

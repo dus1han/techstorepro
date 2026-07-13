@@ -4,10 +4,21 @@ import { useState } from "react";
 import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 
+/**
+ * One field, not two.
+ *
+ * A username is unique only within a company — two shops may each have an "admin" — so the login has
+ * to say which company it means. It could have been a separate "company code" box, but that asks the
+ * user to know something they have no way of discovering; and it could have been a dropdown, but that
+ * would show every tenant on the platform to anyone who opened this page.
+ *
+ * So the company rides along in the login itself: `ahmed@GULF01`. The user learns their own code once,
+ * from whoever set up their account, and never needs to know that any other company exists.
+ */
 export default function LoginPage() {
   const { login } = useAuth();
 
-  const [email, setEmail] = useState("");
+  const [loginName, setLoginName] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -18,11 +29,11 @@ export default function LoginPage() {
     setBusy(true);
 
     try {
-      await login(email, password);
+      await login(loginName, password);
     } catch (caught) {
-      // The API deliberately gives the same message for "no such user" and "wrong password", so
-      // this cannot be used to discover which email addresses are registered. Passing its message
-      // through unchanged keeps that property.
+      // The API deliberately gives the same message for "no such company", "no such user" and "wrong
+      // password". Told apart they would be a map of the platform, so passing its message through
+      // unchanged is what keeps that property — do not try to be more helpful here.
       setError(
         caught instanceof ApiError
           ? caught.message
@@ -43,18 +54,26 @@ export default function LoginPage() {
 
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <label htmlFor="email" className="text-sm font-medium">
-              Email
+            <label htmlFor="login" className="text-sm font-medium">
+              Username
             </label>
             <input
-              id="email"
-              type="email"
+              id="login"
+              type="text"
+              inputMode="email"
               autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
               required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              placeholder="ahmed@GULF01"
+              value={loginName}
+              onChange={(e) => setLoginName(e.target.value)}
               className="w-full rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm outline-none focus:border-slate-900 dark:border-slate-700 dark:focus:border-slate-300"
             />
+            <p className="text-xs text-slate-500">
+              Your username, then your company code — for example{" "}
+              <span className="font-mono">ahmed@GULF01</span>.
+            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -89,6 +108,12 @@ export default function LoginPage() {
             {busy ? "Signing in…" : "Sign in"}
           </button>
         </form>
+
+        {/* No "create an account" link, and that is not an omission. A company cannot bring itself
+            into existence any more — TechStorePro onboards it, and hands over the first login. */}
+        <p className="mt-6 text-center text-xs text-slate-500">
+          Need an account? Your company administrator creates it for you.
+        </p>
       </div>
     </main>
   );

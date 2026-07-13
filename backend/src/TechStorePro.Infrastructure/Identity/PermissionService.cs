@@ -49,9 +49,15 @@ public class PermissionService : IPermissionService
             return [];
         }
 
-        var membership = await GetMembershipAsync(userId, companyId, cancellationToken);
+        // Tenant-filtered, so this can only ever find a user of the company on the caller's token. A
+        // user id from one company presented against another's tenant simply does not resolve.
+        var user = await _db.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(
+                u => u.Id == userId && u.CompanyId == companyId && u.IsActive,
+                cancellationToken);
 
-        if (membership is null)
+        if (user is null)
         {
             return [];
         }
@@ -59,16 +65,17 @@ public class PermissionService : IPermissionService
         // The owner holds everything, implicitly and unconditionally.
         //
         // Without this, a company could revoke the permission to manage permissions from its last
-        // administrator and lock itself out of its own tenant with no way back in short of a
-        // database edit. The owner flag is set once, at registration, and is the floor under that.
-        if (membership.IsOwner)
+        // administrator and lock itself out of its own tenant with no way back in short of a database
+        // edit. The owner flag is set once, when the platform onboards the company, and is the floor
+        // under that.
+        if (user.IsOwner)
         {
             return FeatureCatalog.All
                 .SelectMany(f => f.SupportedActions.Select(a => new PermissionGrant(f.Code, a)))
                 .ToList();
         }
 
-        var key = CacheKey(membership.Id);
+        var key = CacheKey(user.Id);
 
         if (_cache.TryGetValue(key, out IReadOnlyCollection<PermissionGrant>? cached) && cached is not null)
         {
@@ -76,7 +83,7 @@ public class PermissionService : IPermissionService
         }
 
         var grants = await _db.UserPermissions
-            .Where(p => p.CompanyUserId == membership.Id && p.Granted)
+            .Where(p => p.UserId == user.Id && p.Granted)
             .Select(p => new PermissionGrant(p.FeatureCode, p.Action))
             .ToListAsync(cancellationToken);
 
@@ -106,17 +113,7 @@ public class PermissionService : IPermissionService
         }
     }
 
-    public void InvalidateCache(Guid companyUserId) => _cache.Remove(CacheKey(companyUserId));
+    public void InvalidateCache(Guid userId) => _cache.Remove(CacheKey(userId));
 
-    private async Task<CompanyUser?> GetMembershipAsync(
-        Guid userId,
-        Guid companyId,
-        CancellationToken cancellationToken) =>
-        await _db.CompanyUsers
-            .AsNoTracking()
-            .FirstOrDefaultAsync(
-                m => m.UserId == userId && m.CompanyId == companyId && m.IsActive,
-                cancellationToken);
-
-    private static string CacheKey(Guid companyUserId) => $"permissions:{companyUserId}";
+    private static string CacheKey(Guid userId) => $"permissions:{userId}";
 }

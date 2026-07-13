@@ -77,10 +77,12 @@ export interface CompanyMembership {
 
 export interface CurrentUser {
   userId: string;
-  email: string;
+  username: string;
   fullName: string;
-  activeCompanyId: string | null;
-  activeCompanyName: string | null;
+  companyId: string | null;
+  companyName: string | null;
+  /** Shown so the user can be reminded what to type after the '@' next time they sign in. */
+  companyCode: string | null;
   isOwner: boolean;
   permissions: Permission[];
   accessibleBranchIds: string[];
@@ -91,7 +93,6 @@ export interface AuthResult {
   refreshToken: string;
   accessTokenExpiresAt: string;
   user: CurrentUser;
-  companies: CompanyMembership[];
 }
 
 export interface Branch {
@@ -108,10 +109,12 @@ export interface Branch {
 }
 
 export interface CompanyUser {
-  companyUserId: string;
   userId: string;
+  username: string;
+  /** What this person actually types to sign in, e.g. "ahmed@GULF01". */
+  login: string;
   fullName: string;
-  email: string;
+  email: string | null;
   phone: string | null;
   isOwner: boolean;
   isActive: boolean;
@@ -134,9 +137,9 @@ export interface PermissionGridFeature {
 }
 
 export interface PermissionGrid {
-  companyUserId: string;
+  userId: string;
   userFullName: string;
-  userEmail: string;
+  username: string;
   isOwner: boolean;
   features: PermissionGridFeature[];
 }
