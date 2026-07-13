@@ -68,6 +68,14 @@ public static class FeatureCatalog
     public const string SupplierPayments = "purchasing.payments";
     public const string ImportShipments = "purchasing.imports";
 
+    // --- P5: sales ---
+    public const string Quotations = "sales.quotations";
+    public const string SalesOrders = "sales.orders";
+    public const string Deliveries = "sales.deliveries";
+    public const string SalesInvoices = "sales.invoices";
+    public const string CustomerPayments = "sales.payments";
+    public const string CreditNotes = "sales.credit_notes";
+
     private static readonly PermissionAction[] ReadOnly = [PermissionAction.View, PermissionAction.Export];
 
     private static readonly PermissionAction[] Full =
@@ -152,7 +160,31 @@ public static class FeatureCatalog
         // Approve is the one that matters here, and it is not a formality: approving an import's
         // apportionment folds its freight into the weighted average of every product in the container,
         // where it spreads to stock that arrived years ago and never washes out (§45 D1, D6).
-        new() { Code = ImportShipments, Module = "Purchasing", Name = "Import shipments & landed cost", DisplayOrder = 350, SupportedActions = ManageAndApprove }
+        new() { Code = ImportShipments, Module = "Purchasing", Name = "Import shipments & landed cost", DisplayOrder = 350, SupportedActions = ManageAndApprove },
+
+        // Sales. Where Approve sits here is the whole control structure of the module.
+        //
+        // A quotation is an offer and moves nothing, so it carries no approval — a salesperson may quote
+        // whatever they like. What they may not do is *sell* below the floor: that approval is on the
+        // invoice and the order, because those are the documents that bind the shop to the price.
+        new() { Code = Quotations, Module = "Sales", Name = "Quotations", DisplayOrder = 410, SupportedActions = Full },
+
+        // Confirming an order reserves stock and commits goods to someone who has not paid, which is why
+        // the credit-limit check lives there. Approve authorises a discount below the price list's floor.
+        new() { Code = SalesOrders, Module = "Sales", Name = "Sales orders", DisplayOrder = 420, SupportedActions = ManageAndApprove },
+
+        // Delivering moves stock, and it is the only thing in sales that does. There is no approval step:
+        // the customer is at the counter and the goods are in their hands. Refusing to record that
+        // because a manager is at lunch would leave the shelf and the system disagreeing — the same
+        // reasoning as goods receipts.
+        new() { Code = Deliveries, Module = "Sales", Name = "Deliveries & picking", DisplayOrder = 430, SupportedActions = Full },
+
+        new() { Code = SalesInvoices, Module = "Sales", Name = "Sales invoices", DisplayOrder = 440, SupportedActions = ManageAndApprove },
+        new() { Code = CustomerPayments, Module = "Sales", Name = "Customer payments", DisplayOrder = 450, SupportedActions = Full },
+
+        // A credit note gives money back and puts stock on the shelf that a customer says they returned.
+        // Approve is the control, and it is the one grant on this module a shop should be stingy with.
+        new() { Code = CreditNotes, Module = "Sales", Name = "Returns & credit notes", DisplayOrder = 460, SupportedActions = ManageAndApprove }
     ];
 
     public static bool Exists(string code) => All.Any(f => f.Code == code);

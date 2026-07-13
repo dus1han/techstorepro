@@ -4,6 +4,7 @@ using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Domain.Purchasing;
+using TechStorePro.Domain.Sales;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -41,6 +42,20 @@ public interface IApplicationDbContext
     DbSet<SupplierPaymentAllocation> SupplierPaymentAllocations { get; }
     DbSet<ImportShipment> ImportShipments { get; }
     DbSet<ImportShipmentCharge> ImportShipmentCharges { get; }
+
+    // --- Sales (P5) ----------------------------------------------------------------------------
+    //
+    // None of these may write stock. The delivery is the only sales document that moves goods, and it
+    // does it through IStockLedger like everything else — see architecture.md §4.5.
+    DbSet<Quotation> Quotations { get; }
+    DbSet<QuotationLine> QuotationLines { get; }
+    DbSet<SalesOrder> SalesOrders { get; }
+    DbSet<SalesOrderLine> SalesOrderLines { get; }
+    DbSet<Delivery> Deliveries { get; }
+    DbSet<DeliveryLine> DeliveryLines { get; }
+    DbSet<DeliverySerial> DeliverySerials { get; }
+    DbSet<SalesInvoice> SalesInvoices { get; }
+    DbSet<SalesInvoiceLine> SalesInvoiceLines { get; }
 
     // --- The platform, not a tenant ------------------------------------------------------------
     // Deliberately not ITenantScoped: a platform admin belongs to no company. These are the only

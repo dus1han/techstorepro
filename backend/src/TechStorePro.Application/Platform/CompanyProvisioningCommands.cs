@@ -266,11 +266,13 @@ public class CreateCompanyCommandHandler : IRequestHandler<CreateCompanyCommand,
             [DocumentType.Quotation] = "QT",
             [DocumentType.SalesOrder] = "SO",
             [DocumentType.Invoice] = "INV",
+            [DocumentType.DeliveryNote] = "DLV",
             [DocumentType.CreditNote] = "CN",
             [DocumentType.DebitNote] = "DN",
             [DocumentType.Payment] = "PAY",
             [DocumentType.PurchaseOrder] = "PO",
             [DocumentType.GoodsReceipt] = "GRN",
+            [DocumentType.SupplierInvoice] = "SINV",
             [DocumentType.SupplierPayment] = "SPY",
             [DocumentType.StockTransfer] = "TRF",
             [DocumentType.StockAdjustment] = "ADJ",
@@ -279,6 +281,22 @@ public class CreateCompanyCommandHandler : IRequestHandler<CreateCompanyCommand,
             [DocumentType.Expense] = "EXP",
             [DocumentType.ImportShipment] = "IMP"
         };
+
+        // A document type with no prefix here is not fatal — DocumentNumberGenerator would invent one
+        // from the enum name — and that is exactly why it is worth failing on. P4 added SupplierInvoice
+        // and forgot this dictionary, so supplier invoices would have numbered themselves "SUP-…":
+        // nothing broke, nothing complained, and the shop would have discovered its own numbering
+        // convention had been chosen for it by a substring. Adding a document type now breaks here, at
+        // the one moment someone is in a position to choose the prefix deliberately.
+        var missing = Enum.GetValues<DocumentType>().Where(t => !prefixes.ContainsKey(t)).ToList();
+
+        if (missing.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"No document number prefix is defined for: {string.Join(", ", missing)}. "
+                + "Add one to SeedDocumentNumbering — a company must not be provisioned with a "
+                + "numbering convention nobody chose.");
+        }
 
         foreach (var (type, prefix) in prefixes)
         {

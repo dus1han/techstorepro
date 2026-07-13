@@ -3,12 +3,14 @@ using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Application.Identity.Services;
 using TechStorePro.Application.Inventory.Barcodes;
 using TechStorePro.Application.Inventory.Services;
+using TechStorePro.Application.Sales.Services;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Infrastructure.Catalog;
 using TechStorePro.Infrastructure.Configuration;
 using TechStorePro.Infrastructure.Identity;
 using TechStorePro.Infrastructure.Inventory;
 using TechStorePro.Infrastructure.Persistence;
+using TechStorePro.Infrastructure.Sales;
 using TechStorePro.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -57,8 +59,16 @@ public static class DependencyInjection
         services.AddScoped<ISettingsProvider, SettingsProvider>();
         services.AddScoped<IDocumentNumberGenerator, DocumentNumberGenerator>();
 
-        // P2. Sales (P5) will call this and snapshot the result onto the invoice line.
+        // P2. Sales calls this and snapshots the result onto the document line.
         services.AddScoped<IPriceResolver, PriceResolver>();
+
+        // P5. Tax is resolved, never assumed: no jurisdiction and no rate is hardcoded anywhere in this
+        // codebase (§45 D7). A company that configures no tax rate legitimately sells at zero.
+        services.AddScoped<ITaxResolver, TaxResolver>();
+
+        // One place where price, tax and the discount floor meet. A quotation, an order and an invoice
+        // must not price the same line three different ways.
+        services.AddScoped<ISalesLinePricer, SalesLinePricer>();
 
         // P3 — the stock ledger. Registered once, injected everywhere stock moves, and the only thing
         // in the system permitted to write stock_movements, stock_balances or a serial's status

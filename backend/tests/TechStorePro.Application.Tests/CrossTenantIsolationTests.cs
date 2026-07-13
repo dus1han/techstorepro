@@ -2,6 +2,7 @@ using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
+using TechStorePro.Domain.Sales;
 using TechStorePro.Infrastructure.Persistence;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -503,6 +504,193 @@ public class CrossTenantIsolationTests : IAsyncLifetime
 
         // Otherwise 'ahmed@GULF01' would identify two people and the login could not resolve either.
         await act.Should().ThrowAsync<DbUpdateException>();
+    }
+
+    [Fact]
+    public async Task Sales_are_isolated_per_company_too()
+    {
+        // P5 added nine tables, and they hold the most sensitive rows in the system: what a company sells,
+        // to whom, at what price, and at what margin. A sales entity that forgot ITenantScoped would pass
+        // every other test in this suite and quietly show one shop its competitor's order book.
+        await using var asA = CreateContext(_companyA);
+
+        var customer = new Customer { CompanyId = _companyA, Code = "A-CUST", Name = "A's customer" };
+
+        var product = new Product
+        {
+            CompanyId = _companyA,
+            ItemCode = "A-SELL",
+            Sku = "A-SELL",
+            Name = "A's product",
+            Unit = "each",
+            TrackingMode = TrackingMode.None,
+            SellingPrice = 100m
+        };
+
+        var warehouse = new Warehouse
+        {
+            CompanyId = _companyA,
+            BranchId = _branchOfA,
+            Name = "A Sales Store",
+            Code = "A-SALES"
+        };
+
+        asA.Customers.Add(customer);
+        asA.Products.Add(product);
+        asA.Warehouses.Add(warehouse);
+        await asA.SaveChangesAsync();
+
+        var quotation = new Quotation
+        {
+            CompanyId = _companyA,
+            Number = "QT-2026-00001",
+            CustomerId = customer.Id,
+            BranchId = _branchOfA,
+            QuotedAt = DateTimeOffset.UnixEpoch
+        };
+
+        var order = new SalesOrder
+        {
+            CompanyId = _companyA,
+            Number = "SO-2026-00001",
+            CustomerId = customer.Id,
+            BranchId = _branchOfA,
+            WarehouseId = warehouse.Id,
+            OrderedAt = DateTimeOffset.UnixEpoch
+        };
+
+        var delivery = new Delivery
+        {
+            CompanyId = _companyA,
+            Number = "DLV-2026-00001",
+            CustomerId = customer.Id,
+            BranchId = _branchOfA,
+            WarehouseId = warehouse.Id,
+            DeliveredAt = DateTimeOffset.UnixEpoch
+        };
+
+        var invoice = new SalesInvoice
+        {
+            CompanyId = _companyA,
+            Number = "INV-2026-00001",
+            CustomerId = customer.Id,
+            BranchId = _branchOfA,
+            InvoicedAt = DateTimeOffset.UnixEpoch
+        };
+
+        asA.Quotations.Add(quotation);
+        asA.SalesOrders.Add(order);
+        asA.Deliveries.Add(delivery);
+        asA.SalesInvoices.Add(invoice);
+        await asA.SaveChangesAsync();
+
+        asA.QuotationLines.Add(new QuotationLine
+        {
+            CompanyId = _companyA,
+            QuotationId = quotation.Id,
+            ProductId = product.Id,
+            Description = "A's product",
+            Quantity = 1,
+            UnitPrice = 100m,
+            TaxPercent = 5m
+        });
+
+        asA.SalesOrderLines.Add(new SalesOrderLine
+        {
+            CompanyId = _companyA,
+            SalesOrderId = order.Id,
+            ProductId = product.Id,
+            Description = "A's product",
+            Quantity = 1,
+            UnitPrice = 100m,
+            TaxPercent = 5m
+        });
+
+        var deliveryLine = new DeliveryLine
+        {
+            CompanyId = _companyA,
+            DeliveryId = delivery.Id,
+            ProductId = product.Id,
+            Quantity = 1,
+            UnitCost = 60m
+        };
+
+        asA.DeliveryLines.Add(deliveryLine);
+        await asA.SaveChangesAsync();
+
+        asA.SalesInvoiceLines.Add(new SalesInvoiceLine
+        {
+            CompanyId = _companyA,
+            SalesInvoiceId = invoice.Id,
+            DeliveryLineId = deliveryLine.Id,
+            ProductId = product.Id,
+            Description = "A's product",
+            Quantity = 1,
+            UnitPrice = 100m,
+            TaxPercent = 5m,
+            UnitCost = 60m
+        });
+
+        await asA.SaveChangesAsync();
+
+        // B holds every one of A's ids, and still sees nothing.
+        await using var asB = CreateContext(_companyB);
+
+        (await asB.Quotations.CountAsync()).Should().Be(0);
+        (await asB.QuotationLines.CountAsync()).Should().Be(0);
+        (await asB.SalesOrders.CountAsync()).Should().Be(0);
+        (await asB.SalesOrderLines.CountAsync()).Should().Be(0);
+        (await asB.Deliveries.CountAsync()).Should().Be(0);
+        (await asB.DeliveryLines.CountAsync()).Should().Be(0);
+        (await asB.DeliverySerials.CountAsync()).Should().Be(0);
+        (await asB.SalesInvoices.CountAsync()).Should().Be(0);
+        (await asB.SalesInvoiceLines.CountAsync()).Should().Be(0);
+
+        // Not even by asking for the exact row — the margin on A's sale is A's business alone.
+        (await asB.SalesInvoices.FirstOrDefaultAsync(i => i.Id == invoice.Id)).Should().BeNull();
+        (await asB.SalesOrders.FirstOrDefaultAsync(o => o.Id == order.Id)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Two_companies_may_each_raise_invoice_number_one()
+    {
+        // Document numbers are per (company, branch, type, year). Global uniqueness would mean one shop's
+        // sales volume dictated another's invoice numbers — and an auditor asking why INV-2026-00002 does
+        // not exist would get no answer anyone could give.
+        await using var asA = CreateContext(_companyA);
+        await using var asB = CreateContext(_companyB);
+
+        var customerA = new Customer { CompanyId = _companyA, Code = "A-C", Name = "A's customer" };
+        var customerB = new Customer { CompanyId = _companyB, Code = "B-C", Name = "B's customer" };
+
+        asA.Customers.Add(customerA);
+        asB.Customers.Add(customerB);
+        await asA.SaveChangesAsync();
+        await asB.SaveChangesAsync();
+
+        asA.SalesInvoices.Add(new SalesInvoice
+        {
+            CompanyId = _companyA,
+            Number = "INV-2026-00001",
+            CustomerId = customerA.Id,
+            BranchId = _branchOfA,
+            InvoicedAt = DateTimeOffset.UnixEpoch
+        });
+
+        await asA.SaveChangesAsync();
+
+        asB.SalesInvoices.Add(new SalesInvoice
+        {
+            CompanyId = _companyB,
+            Number = "INV-2026-00001",
+            CustomerId = customerB.Id,
+            BranchId = _branchOfB,
+            InvoicedAt = DateTimeOffset.UnixEpoch
+        });
+
+        var act = async () => await asB.SaveChangesAsync();
+
+        await act.Should().NotThrowAsync("an invoice number is unique within a company, not across the platform");
     }
 
     private ApplicationDbContext CreateContext(

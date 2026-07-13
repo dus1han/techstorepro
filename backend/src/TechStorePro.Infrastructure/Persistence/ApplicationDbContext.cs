@@ -9,6 +9,7 @@ using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Domain.Purchasing;
+using TechStorePro.Domain.Sales;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -70,6 +71,17 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<SupplierPaymentAllocation> SupplierPaymentAllocations => Set<SupplierPaymentAllocation>();
     public DbSet<ImportShipment> ImportShipments => Set<ImportShipment>();
     public DbSet<ImportShipmentCharge> ImportShipmentCharges => Set<ImportShipmentCharge>();
+
+    // --- Sales (P5) ----------------------------------------------------------------------------
+    public DbSet<Quotation> Quotations => Set<Quotation>();
+    public DbSet<QuotationLine> QuotationLines => Set<QuotationLine>();
+    public DbSet<SalesOrder> SalesOrders => Set<SalesOrder>();
+    public DbSet<SalesOrderLine> SalesOrderLines => Set<SalesOrderLine>();
+    public DbSet<Delivery> Deliveries => Set<Delivery>();
+    public DbSet<DeliveryLine> DeliveryLines => Set<DeliveryLine>();
+    public DbSet<DeliverySerial> DeliverySerials => Set<DeliverySerial>();
+    public DbSet<SalesInvoice> SalesInvoices => Set<SalesInvoice>();
+    public DbSet<SalesInvoiceLine> SalesInvoiceLines => Set<SalesInvoiceLine>();
 
     // --- Configuration (P1) ------------------------------------------------------------------
     public DbSet<SettingDefinition> SettingDefinitions => Set<SettingDefinition>();

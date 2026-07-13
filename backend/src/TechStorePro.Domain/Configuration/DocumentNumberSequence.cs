@@ -31,7 +31,14 @@ public enum DocumentType : short
     /// bill the shop *sent* — sharing one sequence would interleave money owed with money due and make
     /// "INV-2026-00042" ambiguous about which direction it points.
     /// </summary>
-    SupplierInvoice = 16
+    SupplierInvoice = 16,
+
+    /// <summary>
+    /// The note that goes out with the goods. Distinct from <see cref="Invoice"/> because the two are
+    /// different events: the goods can leave in March and be billed in April, and one invoice may cover
+    /// three deliveries. It is the delivery that says which serial went out of the door.
+    /// </summary>
+    DeliveryNote = 17
 }
 
 /// <summary>
