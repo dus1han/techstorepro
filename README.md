@@ -2,7 +2,7 @@
 
 Multi-company SaaS ERP for a computer **sales**, **import** and **repair** business.
 
-**Phases P0–P4 are complete, and P5's backend is done.** A company is onboarded by TechStorePro; its
+**Phases P0–P5 are complete.** A company is onboarded by TechStorePro; its
 staff sign in as `username@COMPANY`, hold permissions granted feature by feature, and leave an audit
 trail behind every change. The shop keeps a full catalogue, prices it properly (a wholesale customer and
 a walk-in are quoted different prices, and the system reports which price list it used), holds stock in a
@@ -12,8 +12,8 @@ Quote → order → delivery → invoice → payment, plus a POS till, returns, 
 The delivery is the only sales document that moves stock, and it is where the serial binds: that is what
 will let a warranty claim in P6 find the invoice line that sold a given laptop, two years from now.
 
-The remaining work — the sales screens, repairs, finance, the SaaS platform — is sequenced in
-[docs/development-plan.md](docs/development-plan.md). **P5's screens are next**, then P6 (repairs).
+The remaining work — repairs, finance, the SaaS platform — is sequenced in
+[docs/development-plan.md](docs/development-plan.md). **P6 (repairs) is next.**
 
 ## Stack
 

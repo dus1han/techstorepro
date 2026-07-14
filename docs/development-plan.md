@@ -1,7 +1,9 @@
 # Development plan
 
-> Status: **P0–P4 complete. P5 (sales) — backend complete, screens outstanding. Q6 and Q8 are answered
-> (§45 D7, D8). P6 (repairs) is next: it needs P5's serial-to-invoice-line binding, which is built.**
+> Status: **P0–P5 complete.** Q6 and Q8 are answered (§45 D7, D8). The shop can sell: quote → order →
+> delivery → invoice → payment, a POS till, returns, credit notes and store credit — proven end to end
+> against a live API, not only by tests. **P6 (repairs) is next**: it needs P5's serial-to-invoice-line
+> binding, which is built and set.
 >
 > Phases are numbered P0–P9 and match [architecture.md §6](architecture.md). The earlier M0–M8
 > milestone numbering is gone: it mapped almost one-to-one, and keeping two schemes alive only
@@ -196,7 +198,7 @@ to the parent's navigation collection; EF's fixup had already done the latter, s
 from the in-memory graph — including an adjustment's `NetValue`, the money written off — was **double**.
 The database was correct; the documents were not. Fixed, with a regression test.
 
-### P5 — Sales ✅ backend done (screens outstanding)
+### P5 — Sales ✅ done
 
 **Both blocking questions are answered** (§45 **D7**, **D8**): prices are **tax-exclusive** with
 per-company effective-dated rates and **no jurisdiction hardcoded**; sales are raised in the company's
@@ -247,8 +249,24 @@ twice, overselling is refused under the lock, a delivery cannot be billed twice,
 back all three documents, store credit cannot be overspent, and a replayed `Idempotency-Key` posts one
 invoice rather than two.
 
-**Outstanding:** the sales screens. `frontend/src/features/` is still empty, and P5 is the module that
-creates it.
+**The screens.** `frontend/src/features/` existed as a README and nothing else; sales is the module that
+finally creates it, so **the shape it lands on is the shape P6 and P7 will copy**:
+`features/sales/{types, api, money-preview, components}`, with the routes in `app/` staying thin. Seven
+screens — the till, quotations, orders, deliveries, invoices, payments, returns. The till is
+barcode-first: the scan box holds focus and every scan adds a line, because a cashier's hands should
+never have to leave the scanner.
+
+Every state-changing call from the module sends an `Idempotency-Key`, generated **once per attempt**
+rather than per render — a key that changed on re-render would be a new request every time, which is no
+protection at all.
+
+**Verified end to end against a live API**, not only by tests: a company was onboarded, two laptops
+received at 1,200, and one sold through the till. The same idempotency key posted twice returned the
+*identical receipt*, stock fell by exactly one, and exactly one invoice exists. The money came out
+tax-exclusive (1,500 + 75 = 1,575, COGS 1,200, margin 300); the serial went to `Sold` and bound to its
+invoice line; the return brought it back as `Returned` — **not** `InStock`, so it cannot be resold before
+someone inspects it; the store credit landed in its ledger with the customer's balance at exactly zero;
+and the P3 balance audit still agreed afterwards.
 
 ### P6 — Repairs
 
@@ -361,14 +379,16 @@ service logs a warning at start-up saying exactly what stops happening if you do
 
 ## Immediate next steps
 
-1. **Build the sales screens** (P5 slice 4). The backend can sell a serial-tracked laptop, take cash and
-   card for it, and take it back — but only through the API. `frontend/src/features/` is still empty, and
-   sales is the module that creates it: the shape it lands on is the shape P6 and P7 will copy.
-2. **Write the screens against generated types**, and migrate the hand-written `types/*.ts` behind them.
-   The `codegen` script has existed since P3 and nothing imports it yet.
-3. **Then P6 — repairs.** Both its dependencies are now real: parts come out of stock through the ledger
-   (P3), and a warranty claim can find the invoice line that sold a serial (P5's
-   `Serial.SoldInvoiceLineId`, which is set at last).
+1. **P6 — repairs.** Both its dependencies are now real: parts come out of stock through the ledger (P3),
+   and a warranty claim can find the invoice line that sold a serial (P5's `Serial.SoldInvoiceLineId`,
+   which is set at last). Nothing blocks it.
+2. **Give purchasing its screens.** P4's module is still reachable only through the API — a shop cannot
+   receive a container without curl. It should copy the `features/sales/` shape.
+3. **Migrate the frontend onto generated types.** The `codegen` script has existed since P3 and nothing
+   imports it. Sales is the natural first module to move, and the older hand-written files follow.
+4. **Decide what a zero credit limit means.** `Customer.WouldExceedCreditLimit` treats zero as
+   *unlimited*, while the entity's own comment says zero means "cash only". Nothing exercised it until
+   P5. It is a one-line change either way, but it is a business decision, not a technical one.
 
 ## Open questions that still block a phase
 
