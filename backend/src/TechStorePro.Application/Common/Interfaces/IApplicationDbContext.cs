@@ -56,6 +56,15 @@ public interface IApplicationDbContext
     DbSet<DeliverySerial> DeliverySerials { get; }
     DbSet<SalesInvoice> SalesInvoices { get; }
     DbSet<SalesInvoiceLine> SalesInvoiceLines { get; }
+    DbSet<CustomerPayment> CustomerPayments { get; }
+    DbSet<CustomerPaymentMethod> CustomerPaymentMethods { get; }
+    DbSet<CustomerPaymentAllocation> CustomerPaymentAllocations { get; }
+
+    /// <summary>
+    /// Requests the API has already answered. Written by <c>IdempotencyFilter</c>, and by nothing else —
+    /// a handler that touched this would be forging its own retry history.
+    /// </summary>
+    DbSet<IdempotencyRecord> IdempotencyRecords { get; }
 
     // --- The platform, not a tenant ------------------------------------------------------------
     // Deliberately not ITenantScoped: a platform admin belongs to no company. These are the only

@@ -43,6 +43,9 @@ public record DeliverGoodsCommand(
     string? DeliveredTo = null,
     string? Notes = null) : IRequest<Guid>;
 
+/// <summary>What a delivery posting produced — the document, and its lines in the order they were asked for.</summary>
+internal record DeliveryPosting(Delivery Delivery, IReadOnlyList<DeliveryLine> Lines);
+
 public class DeliverGoodsCommandValidator : AbstractValidator<DeliverGoodsCommand>
 {
     public DeliverGoodsCommandValidator()
@@ -89,6 +92,29 @@ public class DeliverGoodsCommandHandler : IRequestHandler<DeliverGoodsCommand, G
         // document accounting for it.
         await using var transaction = await _db.BeginTransactionAsync(cancellationToken);
 
+        var delivered = await PostAsync(request, cancellationToken);
+
+        await _db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        return delivered.Delivery.Id;
+    }
+
+    /// <summary>
+    /// The delivery itself, without owning the transaction — so the counter sale can move the goods, raise
+    /// the bill and take the money inside <em>one</em> transaction. A declined card must leave the laptop
+    /// on the shelf, and that is only true if all three share a rollback.
+    /// </summary>
+    /// <remarks>
+    /// The lines come back <b>in the order they were requested</b>, and not through
+    /// <c>delivery.Lines</c>: that collection is populated by EF's fixup, whose order is an implementation
+    /// detail. The counter sale zips these against its own lines to carry each one's discount onto the
+    /// invoice, and zipping against an arbitrary order would put one product's discount on another's.
+    /// </remarks>
+    internal async Task<DeliveryPosting> PostAsync(
+        DeliverGoodsCommand request,
+        CancellationToken cancellationToken)
+    {
         var deliveredAt = request.DeliveredAt ?? _clock.UtcNow;
 
         var order = await LoadOrderAsync(request, cancellationToken);
@@ -119,6 +145,8 @@ public class DeliverGoodsCommandHandler : IRequestHandler<DeliverGoodsCommand, G
 
         _db.Deliveries.Add(delivery);
 
+        var documentLines = new List<DeliveryLine>();
+
         foreach (var line in request.Lines)
         {
             var orderLine = ResolveOrderLine(order, line);
@@ -136,6 +164,7 @@ public class DeliverGoodsCommandHandler : IRequestHandler<DeliverGoodsCommand, G
             // Through the DbSet, and only the DbSet. See ReceiveGoodsCommand — adding to the parent's
             // collection as well double-counts every total computed from it.
             _db.DeliveryLines.Add(documentLine);
+            documentLines.Add(documentLine);
 
             var result = await _ledger.PostAsync(
                 new StockPosting(
@@ -190,10 +219,7 @@ public class DeliverGoodsCommandHandler : IRequestHandler<DeliverGoodsCommand, G
 
         order?.RefreshDeliveryStatus();
 
-        await _db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-
-        return delivery.Id;
+        return new DeliveryPosting(delivery, documentLines);
     }
 
     private async Task<SalesOrder?> LoadOrderAsync(

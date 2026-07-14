@@ -82,6 +82,11 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<DeliverySerial> DeliverySerials => Set<DeliverySerial>();
     public DbSet<SalesInvoice> SalesInvoices => Set<SalesInvoice>();
     public DbSet<SalesInvoiceLine> SalesInvoiceLines => Set<SalesInvoiceLine>();
+    public DbSet<CustomerPayment> CustomerPayments => Set<CustomerPayment>();
+    public DbSet<CustomerPaymentMethod> CustomerPaymentMethods => Set<CustomerPaymentMethod>();
+    public DbSet<CustomerPaymentAllocation> CustomerPaymentAllocations => Set<CustomerPaymentAllocation>();
+
+    public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 
     // --- Configuration (P1) ------------------------------------------------------------------
     public DbSet<SettingDefinition> SettingDefinitions => Set<SettingDefinition>();

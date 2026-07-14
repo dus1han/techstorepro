@@ -5,6 +5,28 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace TechStorePro.Infrastructure.Persistence.Configurations;
 
+public class IdempotencyRecordConfiguration : IEntityTypeConfiguration<IdempotencyRecord>
+{
+    public void Configure(EntityTypeBuilder<IdempotencyRecord> builder)
+    {
+        builder.ToTable("idempotency_records");
+
+        builder.Property(r => r.Key).HasMaxLength(200).IsRequired();
+        builder.Property(r => r.Endpoint).HasMaxLength(300).IsRequired();
+        builder.Property(r => r.RequestHash).HasMaxLength(64).IsRequired();
+
+        builder.Ignore(r => r.IsComplete);
+
+        // The whole mechanism rests on this index. Claiming a key is an INSERT, and it is this unique
+        // constraint — not a check-then-write in application code — that makes the claim atomic: two
+        // clicks 50 milliseconds apart cannot both find "no record" and both go on to sell the laptop.
+        //
+        // There is no is_deleted filter on it because there is no is_deleted column: this entity is
+        // deliberately not soft-deletable. See IdempotencyRecord.
+        builder.HasIndex(r => new { r.CompanyId, r.Key, r.Endpoint }).IsUnique();
+    }
+}
+
 public class SettingDefinitionConfiguration : IEntityTypeConfiguration<SettingDefinition>
 {
     public void Configure(EntityTypeBuilder<SettingDefinition> builder)

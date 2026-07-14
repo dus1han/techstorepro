@@ -3,6 +3,8 @@ using TechStorePro.Application.Inventory.Services;
 using TechStorePro.Application.Sales.Deliveries;
 using TechStorePro.Application.Sales.Invoices;
 using TechStorePro.Application.Sales.Orders;
+using TechStorePro.Application.Sales.Payments;
+using TechStorePro.Application.Sales.Pos;
 using TechStorePro.Application.Sales.Quotations;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
@@ -48,6 +50,9 @@ public class SalesTests : IAsyncLifetime
 
     private Guid _laptop;        // serial-tracked, sells at 1,500
     private Guid _cable;         // untracked, sells at 80
+
+    private Guid _cash;
+    private Guid _card;          // requires a reference — a card slip that cannot be reconciled is useless
 
     public async Task InitializeAsync()
     {
@@ -129,12 +134,32 @@ public class SalesTests : IAsyncLifetime
 
         seed.Products.AddRange(laptop, cable);
 
+        var cash = new PaymentMethod
+        {
+            CompanyId = company.Id,
+            Name = "Cash",
+            Kind = PaymentMethodKind.Cash,
+            ValidFrom = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+        };
+
+        var card = new PaymentMethod
+        {
+            CompanyId = company.Id,
+            Name = "Card",
+            Kind = PaymentMethodKind.Card,
+            RequiresReference = true,
+            ValidFrom = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+        };
+
+        seed.PaymentMethods.AddRange(cash, card);
+
         foreach (var (type, prefix) in new[]
                  {
                      (DocumentType.Quotation, "QT"),
                      (DocumentType.SalesOrder, "SO"),
                      (DocumentType.DeliveryNote, "DLV"),
-                     (DocumentType.Invoice, "INV")
+                     (DocumentType.Invoice, "INV"),
+                     (DocumentType.Payment, "PAY")
                  })
         {
             seed.DocumentNumberSequences.Add(new DocumentNumberSequence
@@ -159,6 +184,8 @@ public class SalesTests : IAsyncLifetime
         _walkIn = walkIn.Id;
         _laptop = laptop.Id;
         _cable = cable.Id;
+        _cash = cash.Id;
+        _card = card.Id;
     }
 
     public Task DisposeAsync() => _postgres.DisposeAsync().AsTask();
@@ -559,7 +586,313 @@ public class SalesTests : IAsyncLifetime
         await act.Should().ThrowAsync<DomainException>().WithMessage("*nobody ordered*");
     }
 
+    // --- Payments (requirements §23) ----------------------------------------------------------------
+
+    [Fact]
+    public async Task One_sale_can_be_settled_by_cash_and_card_together()
+    {
+        // The reason tender is a table and not a column on the payment. The customer pays 500 in notes
+        // and puts the rest on a card; a single payment_method_id could not say so, and two payments
+        // would make one sale look like two.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _laptop, 1, 1_200m, ["SN-A"]);
+
+        var deliveryId = await DeliverDirectAsync(db, _customer, (_laptop, 1m, new[] { "SN-A" }));
+        var invoiceId = await InvoiceAsync(db, deliveryId);   // 1,575 with tax
+
+        await PayAsync(
+            db,
+            _customer,
+            methods: [new TenderLine(_cash, 500m), new TenderLine(_card, 1_075m, "AUTH-99")],
+            allocations: [new AllocationLine(invoiceId, 1_575m)]);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var payment = await fresh.CustomerPayments
+            .Include(p => p.Methods)
+            .Include(p => p.Allocations)
+            .SingleAsync();
+
+        payment.Methods.Should().HaveCount(2);
+        payment.Amount.Should().Be(1_575m);
+        payment.UnallocatedAmount.Should().Be(0m);
+
+        var invoice = await fresh.SalesInvoices
+            .Include(i => i.Lines)
+            .Include(i => i.Allocations)
+            .FirstAsync(i => i.Id == invoiceId);
+
+        invoice.Status.Should().Be(SalesInvoiceStatus.Paid);
+        invoice.OutstandingAmount.Should().Be(0m);
+
+        (await fresh.Customers.FirstAsync(c => c.Id == _customer)).Balance
+            .Should().Be(0m, "the bill was raised and settled — the customer owes nothing");
+    }
+
+    [Fact]
+    public async Task One_payment_can_settle_two_invoices()
+    {
+        // And the mirror of it: a single invoice_id on a payment could express neither this nor the
+        // instalment case below.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var first = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 1m, null)));    // 84
+        var second = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 2m, null)));   // 168
+
+        await PayAsync(
+            db,
+            _customer,
+            methods: [new TenderLine(_cash, 252m)],
+            allocations: [new AllocationLine(first, 84m), new AllocationLine(second, 168m)]);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var invoices = await fresh.SalesInvoices.Include(i => i.Lines).Include(i => i.Allocations).ToListAsync();
+
+        invoices.Should().OnlyContain(i => i.Status == SalesInvoiceStatus.Paid);
+        (await fresh.Customers.FirstAsync(c => c.Id == _customer)).Balance.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task An_invoice_can_be_settled_by_two_instalments()
+    {
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var invoiceId = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 2m, null)));  // 168
+
+        await PayAsync(db, _customer, [new TenderLine(_cash, 100m)], [new AllocationLine(invoiceId, 100m)]);
+
+        await using (var half = CreateContext(_companyA))
+        {
+            var invoice = await half.SalesInvoices
+                .Include(i => i.Lines).Include(i => i.Allocations)
+                .FirstAsync(i => i.Id == invoiceId);
+
+            invoice.Status.Should().Be(SalesInvoiceStatus.PartiallyPaid);
+            invoice.OutstandingAmount.Should().Be(68m);
+        }
+
+        await PayAsync(db, _customer, [new TenderLine(_cash, 68m)], [new AllocationLine(invoiceId, 68m)]);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var settled = await fresh.SalesInvoices
+            .Include(i => i.Lines).Include(i => i.Allocations)
+            .FirstAsync(i => i.Id == invoiceId);
+
+        settled.Status.Should().Be(SalesInvoiceStatus.Paid);
+        (await fresh.Customers.FirstAsync(c => c.Id == _customer)).Balance.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task Money_that_arrives_before_the_invoice_is_a_credit_on_the_account()
+    {
+        // A deposit. It is not lost and not guessed at: it takes the balance negative, which is exactly
+        // what "the shop owes them" looks like.
+        await using var db = CreateContext(_companyA);
+
+        await PayAsync(db, _customer, [new TenderLine(_cash, 1_000m)], allocations: null);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var payment = await fresh.CustomerPayments.Include(p => p.Methods).Include(p => p.Allocations).SingleAsync();
+
+        payment.UnallocatedAmount.Should().Be(1_000m);
+
+        (await fresh.Customers.FirstAsync(c => c.Id == _customer)).Balance
+            .Should().Be(-1_000m, "a negative balance is a credit, not a bug");
+    }
+
+    [Fact]
+    public async Task A_payment_cannot_settle_more_of_an_invoice_than_it_owes()
+    {
+        // The over-payment is real money and it belongs on the account as a credit — not hidden inside a
+        // document that would then show as more than settled.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var invoiceId = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 1m, null)));  // 84
+
+        var act = async () => await PayAsync(
+            db,
+            _customer,
+            [new TenderLine(_cash, 200m)],
+            [new AllocationLine(invoiceId, 200m)]);
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*outstanding*");
+    }
+
+    [Fact]
+    public async Task One_customers_money_cannot_settle_anothers_debt()
+    {
+        // Both balances would end up wrong, and the wrong person would be chased.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var invoiceId = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 1m, null)));
+
+        var act = async () => await PayAsync(
+            db,
+            _walkIn,
+            [new TenderLine(_cash, 84m)],
+            [new AllocationLine(invoiceId, 84m)]);
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*different customer*");
+    }
+
+    [Fact]
+    public async Task A_card_payment_without_its_reference_is_refused()
+    {
+        // Without the slip number the money cannot be matched to the bank statement, and it becomes
+        // unreconcilable the moment it lands.
+        await using var db = CreateContext(_companyA);
+
+        var act = async () => await PayAsync(db, _customer, [new TenderLine(_card, 100m)], null);
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*reference*");
+    }
+
+    // --- The till (requirements §22) ----------------------------------------------------------------
+
+    [Fact]
+    public async Task Selling_at_the_till_moves_the_goods_bills_them_and_takes_the_money_at_once()
+    {
+        // One call, one transaction, three documents. At a counter those are a single act.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _laptop, 1, 1_200m, ["SN-A"]);
+
+        var result = await SellAtCounterAsync(
+            db,
+            _walkIn,
+            lines: [new CounterSaleLine(_laptop, 1m, SerialNumbers: ["SN-A"])],
+            methods: [new TenderLine(_cash, 2_000m)]);
+
+        result.Total.Should().Be(1_575m, "1,500 + 5% tax");
+        result.Paid.Should().Be(2_000m);
+        result.Change.Should().Be(425m, "the customer handed over 2,000 for a 1,575 sale");
+
+        await using var fresh = CreateContext(_companyA);
+
+        // The goods left, the serial went with them, and it is bound to the invoice line that sold it.
+        (await fresh.StockBalances.SingleAsync(b => b.ProductId == _laptop)).Quantity.Should().Be(0m);
+
+        var serial = await fresh.Serials.FirstAsync(s => s.SerialNumber == "SN-A");
+        serial.Status.Should().Be(SerialStatus.Sold);
+        serial.SoldInvoiceLineId.Should().NotBeNull();
+
+        // The money the till actually keeps is the sale, not the notes handed over. Recording 2,000 would
+        // leave the shop holding money it gave straight back, and the customer in credit for the change.
+        var payment = await fresh.CustomerPayments.Include(p => p.Methods).Include(p => p.Allocations).SingleAsync();
+        payment.Amount.Should().Be(1_575m);
+        payment.UnallocatedAmount.Should().Be(0m);
+
+        var invoice = await fresh.SalesInvoices
+            .Include(i => i.Lines).Include(i => i.Allocations)
+            .FirstAsync(i => i.Id == result.InvoiceId);
+
+        invoice.Status.Should().Be(SalesInvoiceStatus.Paid);
+
+        (await fresh.Customers.FirstAsync(c => c.Id == _walkIn)).Balance
+            .Should().Be(0m, "a walk-in who paid cash owes nothing and is owed nothing");
+
+        // And the ledger still proves itself.
+        (await new BalanceAuditor(fresh).AuditAsync()).Agrees.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_declined_card_leaves_the_laptop_on_the_shelf()
+    {
+        // The point of doing all three in one transaction. Under-tendering at the till is not a counter
+        // sale — it is a credit sale, and it needs an account and somebody to chase.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _laptop, 1, 1_200m, ["SN-A"]);
+
+        var act = async () => await SellAtCounterAsync(
+            db,
+            _walkIn,
+            lines: [new CounterSaleLine(_laptop, 1m, SerialNumbers: ["SN-A"])],
+            methods: [new TenderLine(_cash, 100m)]);   // nowhere near the 1,575 it comes to
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*tendered*");
+
+        await using var fresh = CreateContext(_companyA);
+
+        (await fresh.StockBalances.SingleAsync(b => b.ProductId == _laptop)).Quantity
+            .Should().Be(1m, "the laptop never left");
+
+        (await fresh.Serials.FirstAsync()).Status.Should().Be(SerialStatus.InStock);
+        (await fresh.Deliveries.AnyAsync()).Should().BeFalse();
+        (await fresh.SalesInvoices.AnyAsync()).Should().BeFalse("no invoice is chasing anybody for it");
+        (await fresh.CustomerPayments.AnyAsync()).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_discount_at_the_till_reaches_the_bill()
+    {
+        // The haggle at the counter has to survive onto the invoice, or the customer is charged the list
+        // price they just talked the salesperson out of.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var result = await SellAtCounterAsync(
+            db,
+            _walkIn,
+            lines: [new CounterSaleLine(_cable, 1m, DiscountPercent: 10m)],
+            methods: [new TenderLine(_cash, 100m)]);
+
+        // 80 − 10% = 72 net; 5% tax = 3.60; total 75.60. Note the tax is charged on the discounted net.
+        result.Total.Should().Be(75.60m);
+        result.Change.Should().Be(24.40m);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var line = await fresh.SalesInvoiceLines.FirstAsync(l => l.SalesInvoiceId == result.InvoiceId);
+
+        line.DiscountPercent.Should().Be(10m);
+        line.NetTotal.Should().Be(72m);
+        line.TaxAmount.Should().Be(3.60m);
+    }
+
     // --- Fixture ------------------------------------------------------------------------------------
+
+    private async Task<Guid> PayAsync(
+        ApplicationDbContext db,
+        Guid customerId,
+        IReadOnlyCollection<TenderLine> methods,
+        IReadOnlyCollection<AllocationLine>? allocations) =>
+        await new RecordPaymentCommandHandler(db, Tenant(), Numbers(db), new StubClock())
+            .Handle(
+                new RecordPaymentCommand(
+                    CustomerId: customerId,
+                    BranchId: _branchOfA,
+                    Methods: methods,
+                    Allocations: allocations),
+                CancellationToken.None);
+
+    private async Task<CounterSaleResult> SellAtCounterAsync(
+        ApplicationDbContext db,
+        Guid customerId,
+        IReadOnlyCollection<CounterSaleLine> lines,
+        IReadOnlyCollection<TenderLine> methods) =>
+        await new SellAtCounterCommandHandler(db, Tenant(), Ledger(db), Pricer(db), Numbers(db), new StubClock())
+            .Handle(
+                new SellAtCounterCommand(
+                    CustomerId: customerId,
+                    BranchId: _branchOfA,
+                    WarehouseId: _warehouseOfA,
+                    Lines: lines,
+                    Methods: methods),
+                CancellationToken.None);
 
     private static string[] Serials(int count) =>
         Enumerable.Range(1, count).Select(i => $"SN-{i:D3}").ToArray();

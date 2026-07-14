@@ -37,12 +37,26 @@ public record ServiceLine(
 /// <b>That link is what makes a warranty claim answerable two years later</b> — P6 walks it backwards
 /// from a machine on the counter to the sale that put it in the customer's hands.
 /// </summary>
+/// <summary>
+/// What the salesperson actually charged for one picked line, when it is not simply what the price list
+/// says — the haggle at the counter (requirements §22, "Discount").
+///
+/// It exists because a counter sale has no order to carry the agreed price on. An ordered line already
+/// has one, and its price wins; see the handler.
+/// </summary>
+public record LinePrice(
+    Guid DeliveryLineId,
+    decimal? UnitPrice = null,
+    decimal DiscountPercent = 0m,
+    decimal DiscountAmount = 0m);
+
 [RequiresPermission(FeatureCatalog.SalesInvoices, PermissionAction.Create)]
 public record RaiseInvoiceCommand(
     Guid DeliveryId,
     DateTimeOffset? InvoicedAt = null,
     DateTimeOffset? DueAt = null,
     IReadOnlyCollection<ServiceLine>? ServiceLines = null,
+    IReadOnlyCollection<LinePrice>? LinePrices = null,
     string? CurrencyCode = null,
     string? Notes = null) : IRequest<Guid>;
 
@@ -90,6 +104,20 @@ public class RaiseInvoiceCommandHandler : IRequestHandler<RaiseInvoiceCommand, G
     {
         await using var transaction = await _db.BeginTransactionAsync(cancellationToken);
 
+        var invoiceId = await PostAsync(request, cancellationToken);
+
+        await _db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        return invoiceId;
+    }
+
+    /// <summary>
+    /// The invoice itself, without owning the transaction — so the counter sale can raise it in the same
+    /// transaction that moved the goods and took the money. See <c>SellAtCounterCommand</c>.
+    /// </summary>
+    internal async Task<Guid> PostAsync(RaiseInvoiceCommand request, CancellationToken cancellationToken)
+    {
         var invoicedAt = request.InvoicedAt ?? _clock.UtcNow;
 
         var currency = await CompanyCurrency.EnsureAsync(_db, _tenant, request.CurrencyCode, cancellationToken);
@@ -146,6 +174,8 @@ public class RaiseInvoiceCommandHandler : IRequestHandler<RaiseInvoiceCommand, G
                 ? orderLines.FirstOrDefault(l => l.Id == orderLineId)
                 : null;
 
+            var over = request.LinePrices?.FirstOrDefault(p => p.DeliveryLineId == deliveryLine.Id);
+
             // An ordered line is billed at the price it was ordered at. Re-resolving it here would mean a
             // price list published between the order and the delivery silently changed what the customer
             // agreed to pay.
@@ -159,14 +189,29 @@ public class RaiseInvoiceCommandHandler : IRequestHandler<RaiseInvoiceCommand, G
                     NetTotal: 0m,
                     MinimumPrice: null,
                     RequiresApproval: false)
+
+                // No order behind it — a counter sale. Price it from the list, with whatever the
+                // salesperson agreed at the till applied on top and checked against the floor.
                 : await _pricer.PriceAsync(
                     deliveryLine.ProductId,
                     customer.Id,
                     deliveryLine.Quantity,
+                    unitPriceOverride: over?.UnitPrice,
+                    discountPercent: over?.DiscountPercent ?? 0m,
+                    discountAmount: over?.DiscountAmount ?? 0m,
                     asOf: invoicedAt,
                     cancellationToken: cancellationToken);
 
             var product = await _db.Products.FirstAsync(p => p.Id == deliveryLine.ProductId, cancellationToken);
+
+            if (priced.RequiresApproval)
+            {
+                // The approval workflow lands in slice 3. Refusing is the honest answer until it does:
+                // billing below the floor without a signature is the giveaway the floor exists to stop.
+                throw new DomainException(
+                    $"{product.Name} is billed below its floor of {priced.MinimumPrice:0.##} and needs a "
+                    + "manager's approval (§32).");
+            }
 
             var invoiceLine = new SalesInvoiceLine
             {
@@ -222,9 +267,6 @@ public class RaiseInvoiceCommandHandler : IRequestHandler<RaiseInvoiceCommand, G
         customer.Balance += invoice.Total;
 
         delivery.Status = DeliveryStatus.Invoiced;
-
-        await _db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
 
         return invoice.Id;
     }

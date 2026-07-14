@@ -70,7 +70,11 @@ builder.Services.AddAuthorization(options =>
         policy => policy.RequireAuthenticatedUser().RequireClaim(TokenService.PlatformAdminClaim, "true"));
 });
 
-builder.Services.AddControllers();
+// The Idempotency-Key filter runs on every state-changing request that carries the header
+// (api-design.md §5). It is registered globally rather than per-controller on purpose: a payment
+// endpoint added later without remembering to opt in is exactly the endpoint that will be
+// double-clicked at a till.
+builder.Services.AddControllers(options => options.Filters.Add<IdempotencyFilter>());
 builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks();
 

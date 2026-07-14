@@ -63,10 +63,18 @@ public class SalesInvoice : TenantEntity
     public string? Notes { get; set; }
 
     public ICollection<SalesInvoiceLine> Lines { get; set; } = [];
+    public ICollection<CustomerPaymentAllocation> Allocations { get; set; } = [];
 
     public decimal NetTotal => Lines.Sum(l => l.NetTotal);
     public decimal TaxTotal => Lines.Sum(l => l.TaxAmount);
     public decimal Total => NetTotal + TaxTotal;
+
+    /// <summary>Received against this invoice — the sum of what payments have pointed at it.</summary>
+    public decimal PaidAmount => Allocations.Sum(a => a.Amount);
+
+    public decimal OutstandingAmount => Total - PaidAmount;
+
+    public bool IsSettled => OutstandingAmount <= 0;
 
     /// <summary>What the goods on this invoice cost the shop. Revenue − this is the margin (§45 D3).</summary>
     public decimal CostTotal => Lines.Sum(l => l.CostTotal);
@@ -99,6 +107,25 @@ public class SalesInvoice : TenantEntity
 
         Validate();
         Status = SalesInvoiceStatus.Posted;
+    }
+
+    /// <summary>
+    /// Called when money is allocated to, or removed from, this invoice. The status is derived from the
+    /// allocations rather than set by the caller — an invoice marked Paid that nobody paid is exactly the
+    /// kind of lie a receivables report cannot survive.
+    /// </summary>
+    public void RefreshPaymentStatus()
+    {
+        if (Status is SalesInvoiceStatus.Draft or SalesInvoiceStatus.Cancelled)
+        {
+            return;
+        }
+
+        Status = IsSettled
+            ? SalesInvoiceStatus.Paid
+            : PaidAmount > 0
+                ? SalesInvoiceStatus.PartiallyPaid
+                : SalesInvoiceStatus.Posted;
     }
 
     public void Cancel()

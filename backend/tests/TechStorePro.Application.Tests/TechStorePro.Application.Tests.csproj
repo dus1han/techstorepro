@@ -28,6 +28,11 @@
     <!-- The isolation tests drive the real ApplicationDbContext, filters and all. Testing a stub
          of it would test the stub. -->
     <ProjectReference Include="..\..\src\TechStorePro.Infrastructure\TechStorePro.Infrastructure.csproj" />
+    <!-- IdempotencyFilter lives in the API layer because it is an HTTP concern, and it is the one
+         thing standing between a double-clicked till and a laptop sold twice. It is driven here
+         directly, against a real database: its guarantee rests on a unique index, and an index is
+         not something a mock can promise. -->
+    <ProjectReference Include="..\..\src\TechStorePro.API\TechStorePro.API.csproj" />
   </ItemGroup>
 
 </Project>

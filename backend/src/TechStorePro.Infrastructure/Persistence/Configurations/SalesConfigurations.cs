@@ -244,6 +244,9 @@ public class SalesInvoiceConfiguration : IEntityTypeConfiguration<SalesInvoice>
         builder.Ignore(i => i.Total);
         builder.Ignore(i => i.CostTotal);
         builder.Ignore(i => i.GrossProfit);
+        builder.Ignore(i => i.PaidAmount);
+        builder.Ignore(i => i.OutstandingAmount);
+        builder.Ignore(i => i.IsSettled);
 
         builder.HasIndex(i => new { i.CompanyId, i.Number })
             .IsUnique()
@@ -266,6 +269,85 @@ public class SalesInvoiceConfiguration : IEntityTypeConfiguration<SalesInvoice>
         builder.HasOne(i => i.SalesOrder).WithMany().HasForeignKey(i => i.SalesOrderId)
             .OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(i => i.Delivery).WithMany().HasForeignKey(i => i.DeliveryId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class CustomerPaymentConfiguration : IEntityTypeConfiguration<CustomerPayment>
+{
+    public void Configure(EntityTypeBuilder<CustomerPayment> builder)
+    {
+        builder.ToTable("customer_payments");
+
+        builder.Property(p => p.Number).HasMaxLength(50).IsRequired();
+        builder.Property(p => p.Reference).HasMaxLength(100);
+        builder.Property(p => p.CurrencyCode).HasMaxLength(3).IsRequired();
+        builder.Property(p => p.Notes).HasMaxLength(1000);
+        builder.Property(p => p.DeletedReason).HasMaxLength(500);
+
+        // There is no Amount column: the total is the sum of the tender. A header amount that could
+        // disagree with its method lines would be a till that does not balance.
+        builder.Ignore(p => p.Amount);
+        builder.Ignore(p => p.AllocatedAmount);
+        builder.Ignore(p => p.UnallocatedAmount);
+
+        builder.HasIndex(p => new { p.CompanyId, p.Number })
+            .IsUnique()
+            .HasFilter("is_deleted = false");
+
+        builder.HasIndex(p => new { p.CompanyId, p.CustomerId, p.PaidAt });
+
+        builder.HasOne(p => p.Customer).WithMany().HasForeignKey(p => p.CustomerId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(p => p.Branch).WithMany().HasForeignKey(p => p.BranchId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class CustomerPaymentMethodConfiguration : IEntityTypeConfiguration<CustomerPaymentMethod>
+{
+    public void Configure(EntityTypeBuilder<CustomerPaymentMethod> builder)
+    {
+        builder.ToTable("customer_payment_methods");
+
+        builder.Property(m => m.Amount).HasColumnType(CatalogTypes.Money);
+        builder.Property(m => m.Reference).HasMaxLength(100);
+        builder.Property(m => m.DeletedReason).HasMaxLength(500);
+
+        builder.HasIndex(m => new { m.CompanyId, m.CustomerPaymentId });
+
+        builder.HasOne(m => m.CustomerPayment).WithMany(p => p.Methods)
+            .HasForeignKey(m => m.CustomerPaymentId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasOne(m => m.PaymentMethod).WithMany().HasForeignKey(m => m.PaymentMethodId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class CustomerPaymentAllocationConfiguration : IEntityTypeConfiguration<CustomerPaymentAllocation>
+{
+    public void Configure(EntityTypeBuilder<CustomerPaymentAllocation> builder)
+    {
+        builder.ToTable("customer_payment_allocations");
+
+        builder.Property(a => a.Amount).HasColumnType(CatalogTypes.Money);
+        builder.Property(a => a.DeletedReason).HasMaxLength(500);
+
+        // One payment settles many invoices; one invoice is settled by many payments. But the same
+        // payment must not be allocated to the same invoice twice — that would double-count the money.
+        builder.HasIndex(a => new { a.CompanyId, a.CustomerPaymentId, a.SalesInvoiceId })
+            .IsUnique()
+            .HasFilter("is_deleted = false");
+
+        builder.HasIndex(a => new { a.CompanyId, a.SalesInvoiceId });
+
+        builder.HasOne(a => a.CustomerPayment).WithMany(p => p.Allocations)
+            .HasForeignKey(a => a.CustomerPaymentId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasOne(a => a.SalesInvoice).WithMany(i => i.Allocations)
+            .HasForeignKey(a => a.SalesInvoiceId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

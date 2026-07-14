@@ -2,6 +2,8 @@ using TechStorePro.Application.Common.Models;
 using TechStorePro.Application.Sales.Deliveries;
 using TechStorePro.Application.Sales.Invoices;
 using TechStorePro.Application.Sales.Orders;
+using TechStorePro.Application.Sales.Payments;
+using TechStorePro.Application.Sales.Pos;
 using TechStorePro.Application.Sales.Queries;
 using TechStorePro.Application.Sales.Quotations;
 using TechStorePro.Domain.Sales;
@@ -197,4 +199,56 @@ public class SalesInvoicesController : ApiControllerBase
         await Mediator.Send(command);
         return NoContent();
     }
+}
+
+/// <summary>
+/// Customer payments (requirements §23).
+///
+/// A payment is a <b>header, its tender lines and its allocations</b>. One sale is settled by cash
+/// <em>and</em> card; one bank transfer settles three invoices; one invoice is settled by two instalments.
+/// A single <c>payment_method_id</c> and a single <c>invoice_id</c> on the header can express none of
+/// that.
+///
+/// Money may arrive with no allocation at all — a deposit, or a customer paying down their account. It is
+/// not lost and not guessed at: it sits as a credit and takes their balance negative.
+///
+/// <b>Send an <c>Idempotency-Key</c> header.</b> A double-clicked "Take payment" would otherwise take the
+/// money twice.
+/// </summary>
+[Route("api/v1/customer-payments")]
+public class CustomerPaymentsController : ApiControllerBase
+{
+    [HttpGet]
+    public async Task<ActionResult<PagedResult<CustomerPaymentDto>>> List(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25,
+        [FromQuery] string? search = null,
+        [FromQuery] Guid? customerId = null) =>
+        Ok(await Mediator.Send(new GetPaymentsQuery(page, pageSize, search, customerId)));
+
+    [HttpPost]
+    public async Task<ActionResult<Guid>> Record(RecordPaymentCommand command)
+    {
+        var id = await Mediator.Send(command);
+        return CreatedAtAction(nameof(Record), new { id }, id);
+    }
+}
+
+/// <summary>
+/// The till (requirements §22, "POS sales").
+///
+/// <b>One call, one transaction, three documents</b> — the goods leave, the bill is raised, the money is
+/// taken. At a counter those are a single act: a customer who has walked out with a laptop has not
+/// "maybe" paid for it. If the card is declined, the laptop is still in stock and no invoice is chasing
+/// anybody.
+///
+/// It composes the same handlers the documented flow uses, so there is still exactly one path by which
+/// stock moves. <b>Send an <c>Idempotency-Key</c>.</b>
+/// </summary>
+[Route("api/v1/pos")]
+public class PosController : ApiControllerBase
+{
+    [HttpPost("sales")]
+    public async Task<ActionResult<CounterSaleResult>> Sell(SellAtCounterCommand command) =>
+        Ok(await Mediator.Send(command));
 }
