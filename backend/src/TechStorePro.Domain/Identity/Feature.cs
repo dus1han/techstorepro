@@ -76,6 +76,12 @@ public static class FeatureCatalog
     public const string CustomerPayments = "sales.payments";
     public const string CreditNotes = "sales.credit_notes";
 
+    // --- P6: repairs ---
+    public const string RepairTickets = "repairs.tickets";
+    public const string RepairParts = "repairs.parts";
+    public const string Outsourcing = "repairs.outsourcing";
+    public const string Warranties = "repairs.warranties";
+
     private static readonly PermissionAction[] ReadOnly = [PermissionAction.View, PermissionAction.Export];
 
     private static readonly PermissionAction[] Full =
@@ -184,7 +190,23 @@ public static class FeatureCatalog
 
         // A credit note gives money back and puts stock on the shelf that a customer says they returned.
         // Approve is the control, and it is the one grant on this module a shop should be stingy with.
-        new() { Code = CreditNotes, Module = "Sales", Name = "Returns & credit notes", DisplayOrder = 460, SupportedActions = ManageAndApprove }
+        new() { Code = CreditNotes, Module = "Sales", Name = "Returns & credit notes", DisplayOrder = 460, SupportedActions = ManageAndApprove },
+
+        // Repairs. Approve on the ticket is not a manager signing off internally — it is the record that
+        // *the customer* agreed to the estimate, and it is the gate on the parts store (§28). Whoever takes
+        // that call needs the grant; the technician who does the work does not.
+        new() { Code = RepairTickets, Module = "Repairs", Name = "Repair jobs", DisplayOrder = 510, SupportedActions = ManageAndApprove },
+
+        // Consuming a part takes it off the shelf and it is not coming back. That is the same authority a
+        // stock adjustment carries, so it is permissioned separately from the job sheet: a front-desk clerk
+        // may book a machine in without being able to empty the parts store.
+        new() { Code = RepairParts, Module = "Repairs", Name = "Parts & labour", DisplayOrder = 520, SupportedActions = Manage },
+
+        new() { Code = Outsourcing, Module = "Repairs", Name = "Outsourced repairs", DisplayOrder = 530, SupportedActions = Manage },
+
+        // Approve is what honours a claim — it is the grant that decides the shop eats the cost of a repair
+        // rather than the customer. Rejecting one is the same decision in the other direction.
+        new() { Code = Warranties, Module = "Repairs", Name = "Warranties & claims", DisplayOrder = 540, SupportedActions = ManageAndApprove }
     ];
 
     public static bool Exists(string code) => All.Any(f => f.Code == code);

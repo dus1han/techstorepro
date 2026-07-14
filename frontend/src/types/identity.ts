@@ -77,6 +77,14 @@ export const FEATURES = {
   salesInvoices: "sales.invoices",
   customerPayments: "sales.payments",
   creditNotes: "sales.credit_notes",
+
+  // P6 — repairs. Approve on a job is not a manager signing off internally: it is the record that *the
+  // customer* agreed to the estimate, and it is the gate on the parts store (§28). Approve on warranties
+  // is the decision that the shop, rather than the customer, eats the cost of a repair.
+  repairTickets: "repairs.tickets",
+  repairParts: "repairs.parts",
+  outsourcing: "repairs.outsourcing",
+  warranties: "repairs.warranties",
 } as const;
 
 export interface Permission {

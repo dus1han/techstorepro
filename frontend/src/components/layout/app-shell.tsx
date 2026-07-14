@@ -59,6 +59,15 @@ const NAV: { section: string; items: NavItem[] }[] = [
     ],
   },
   {
+    section: "Repairs",
+    items: [
+      // The board first: it is the screen the workshop lives in, and the one that answers "where is my
+      // laptop?" — the question the shop is phoned about all day.
+      { href: "/repairs/jobs", label: "Repair jobs", feature: FEATURES.repairTickets },
+      { href: "/repairs/warranties", label: "Warranties & claims", feature: FEATURES.warranties },
+    ],
+  },
+  {
     section: "Inventory",
     items: [
       { href: "/inventory/stock", label: "Stock on hand", feature: FEATURES.stock },

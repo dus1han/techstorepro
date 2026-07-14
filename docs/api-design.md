@@ -192,8 +192,8 @@ Updates to documents carry a `rowVersion`; a mismatch is a `409`, not a silent o
 
 ## 6. Endpoints
 
-Grouped by module, in build order. **P1–P5 are built** (identity, master data, inventory, purchasing,
-sales); repairs, finance and the SaaS platform are still planned.
+Grouped by module, in build order. **P1–P6 are built** (identity, master data, inventory, purchasing,
+sales, repairs); finance and the SaaS platform are still planned.
 
 ```
 # Master data — built (P2), reference-data edit/retire added in P3
@@ -246,16 +246,49 @@ GET    /api/v1/inventory/serials/{serialNumber}   full history — the warranty-
 POST   /api/v1/inventory/labels/print   returns a PDF (Code128 / EAN-13 / QR; thermal or A4 sheet)
 
 # Purchasing and imports — built (P4)
-GET    /api/v1/purchase-orders          POST, /{id}/approve, /{id}/cancel
-                                        Optional: §25 says so. A GRN needs no PO.
+GET    /api/v1/purchase-orders          ?status=&supplierId=   POST, GET /{id}
+POST   /api/v1/purchase-orders/{id}/approve      COMMITS THE MONEY, and is the gate on receiving:
+                                        goods cannot post against a draft. Its own permission, so the
+                                        person who picks the supplier need not be the one who signs.
+POST   /api/v1/purchase-orders/{id}/cancel       refused once goods have arrived against it.
+                                        The whole document is optional: §25 says so. A GRN needs no PO.
+
+GET    /api/v1/goods-receipts           ?supplierId=&importShipmentId=   GET /{id}
 POST   /api/v1/goods-receipts           receives goods AND posts them to stock, in one transaction.
                                         purchaseOrderId is nullable — the direct purchase
                                         (supplier → GRN → stock) is a first-class flow.
                                         Serial numbers are captured here, at the door.
+                                        A line need not name its purchaseOrderLineId: an unnamed line
+                                        is matched on product, so naming the order alone still closes
+                                        it. A genuinely ambiguous order is reported, not guessed at.
 
-GET    /api/v1/import-shipments         POST
+GET    /api/v1/supplier-invoices        ?status=&supplierId=
+POST   /api/v1/supplier-invoices        what they are asking to be paid. It moves NO stock — the
+                                        receipt already did, and doing it here would double it.
+                                        goodsReceiptId is optional: the bill may arrive before the
+                                        goods, or cover several receipts.
+POST   /api/v1/supplier-invoices/{id}/post       posting is what puts the debt on the balance.
+                                        A draft owes nothing.
+POST   /api/v1/supplier-invoices/{id}/cancel     refused once money has been paid against it.
+
+GET    /api/v1/supplier-payments        ?supplierId=
+POST   /api/v1/supplier-payments        header + allocations: one transfer settles three invoices, one
+                                        invoice takes two instalments, and money with no invoice yet is
+                                        an advance, not an error.
+                                        THIS IS WHERE FX SETTLES. The invoice fixed the debt at its own
+                                        rate; the money leaves at today's. A USD 1,000 invoice booked at
+                                        3.67 (AED 3,670) and paid at 3.60 (AED 3,600) leaves the shop
+                                        AED 70 better off — and the balance clears to ZERO, because the
+                                        settled invoice has exactly what it added taken back off. The 70
+                                        is P&L. It is NOT folded into the moving average: the laptops
+                                        did not become cheaper to buy.
+
+GET    /api/v1/import-shipments         ?status=   POST
 POST   /api/v1/import-shipments/{id}/charges     freight, insurance, customs, clearing — any currency
-POST   /api/v1/import-shipments/{id}/apportion   ?basis=ByValue   fold landed cost into inventory
+POST   /api/v1/import-shipments/{id}/apportion   ?basis=ByValue   fold landed cost into inventory.
+                                        Exactly once. Gated on Approve, not Edit, because the money
+                                        feeds a MOVING average and so never washes back out.
+                                        Returns what was absorbed and what was not.
 
 # Sales — built (P5). Prices are tax-exclusive (D7); everything is in the base currency (D8).
 GET    /api/v1/quotations               POST
@@ -288,6 +321,69 @@ POST   /api/v1/pos/sales                the till: goods out, bill raised, money 
 GET    /api/v1/credit-notes             POST   the only thing that puts stock back.
                                         Returned serials go to `Returned`, never straight to `InStock`.
 GET    /api/v1/credit-notes/store-credit/{customerId}   a ledger, so the balance can explain itself
+
+# Repairs — built (P6). The customer's device is NOT stock and never becomes it.
+GET    /api/v1/repairs                  ?status=&customerId=&technicianId=&openOnly=
+                                        openOnly is the §35 pending-repairs report: everything not yet
+                                        delivered or cancelled, promised-date first, so the job that is
+                                        late is the one the shop sees.
+GET    /api/v1/repairs/{id}             the job sheet, with its parts, labour, vendors and history
+
+POST   /api/v1/repairs                  INTAKE. Moves no stock — the machine belongs to the customer.
+                                        It answers the warranty question itself: the serial is looked up,
+                                        the sale that put the machine in the customer's hands is found
+                                        (Serial.SoldInvoiceLineId — the back-edge into Sales), and the
+                                        job is stamped free or chargeable. A tickbox here is how a shop
+                                        bills someone for a repair it promised to do for nothing.
+
+POST   /api/v1/repairs/{id}/diagnose    → Diagnosing
+POST   /api/v1/repairs/{id}/diagnosis   the findings and the estimate. A chargeable job now waits for
+                                        the customer; a WARRANTY job goes straight to the bench, because
+                                        there is no price for anyone to agree to.
+POST   /api/v1/repairs/{id}/approve     THE CUSTOMER'S YES — not a manager's. It is the gate on the
+                                        parts store, and it carries `Approve` for that reason.
+POST   /api/v1/repairs/{id}/decline     the estimate was refused; the device goes back untouched
+POST   /api/v1/repairs/{id}/test        → Testing
+POST   /api/v1/repairs/{id}/ready       → Ready for collection
+POST   /api/v1/repairs/{id}/deliver     the customer collects it. Does NOT require the bill to be paid —
+                                        holding a customer's own laptop hostage over an invoice is not a
+                                        credit-control policy. The debt is on their balance.
+POST   /api/v1/repairs/{id}/cancel      refused once parts are fitted; return them to stock first
+
+POST   /api/v1/repairs/{id}/parts       THE ONLY THING IN REPAIRS THAT MOVES STOCK. A
+                                        `RepairConsumption` through IStockLedger, posted WHEN THE PART IS
+                                        FITTED — not at invoicing (§45 D9). Refused before the customer
+                                        has approved. Priced from the customer's tier, like any sale.
+POST   /api/v1/repairs/parts/{id}/return  a `RepairReturn` movement — a real movement, not an undo
+POST   /api/v1/repairs/{id}/labour      an hour is not a thing on a shelf: no stock, no ledger
+
+POST   /api/v1/repairs/{id}/outsource   §29. No stock moves (the device was never the shop's to move);
+                                        what lands on the ticket is a COST, in the vendor's currency at
+                                        the rate on the day.
+POST   /api/v1/repairs/outsourcing/{id}/receive   what the vendor actually charged
+POST   /api/v1/repairs/outsourcing/{id}/cancel    refused once they have done the work
+
+POST   /api/v1/repairs/{id}/invoice     raises an ORDINARY SALES INVOICE (§45 D11) — no `repair_invoices`
+                                        table, so a repair bill is paid, credited, chased and aged by the
+                                        machinery that already exists. It moves no stock: the parts left
+                                        when they were fitted. A wholly-warranty job is refused rather
+                                        than billed zero.
+
+GET    /api/v1/warranties               POST — a MANUFACTURER'S or a SUPPLIER'S, only.
+                                        The shop's own is refused: P5 computes it at the moment of sale
+                                        from the product's warranty months and stamps it on the unit, and
+                                        a second copy could disagree with the first.
+GET    /api/v1/warranties/check?serialNumber=   "is this machine still under warranty?", asked from the
+                                        counter before anything is booked in. Returns the answer IN WORDS
+                                        the clerk can repeat to the customer — "Shop warranty, sold on
+                                        invoice INV-2026-00001, expires 14 Jul 2027". A bare boolean
+                                        starts an argument; a sentence ends one.
+GET    /api/v1/warranties/claims        ?status=  — with what each claim COST THE SHOP, which is the only
+                                        way to answer "which products keep coming back?"
+POST   /api/v1/warranties/claims/{id}/accept
+POST   /api/v1/warranties/claims/{id}/reject   THE DECISION THAT MAKES THE JOB CHARGEABLE. The parts and
+                                        labour already booked as warranty work become billable, and the
+                                        shop stops eating them. A reason is mandatory.
 ```
 
 **Send an `Idempotency-Key` on `/pos/sales` and `/customer-payments`.** A double-clicked till would
@@ -318,32 +414,19 @@ invoice arrived, there is no stock left to carry that cost: the remainder is rep
 the shipment, rather than silently dropped (which would overstate margin) or smeared over whatever else
 is on the shelf (which would charge one container's freight to another's goods).
 
+### Still planned
+
+Sketches, not contracts — the shape below is what the phase expects to need, and the endpoints that
+actually shipped for P1–P6 are the ones above.
+
 ```
-
-# Sales
-GET    /api/v1/quotes                   POST, /{id}/convert
-GET    /api/v1/sales-orders             POST, /{id}/confirm, /{id}/cancel
-POST   /api/v1/deliveries                        picks serials
-GET    /api/v1/invoices                 POST, /{id}/void
-POST   /api/v1/payments
-POST   /api/v1/credit-notes
-
-# Repairs
-GET    /api/v1/repairs                  ?status=&technicianId=&branchId=
-POST   /api/v1/repairs                           intake
-POST   /api/v1/repairs/{id}/diagnose
-POST   /api/v1/repairs/{id}/quote                -> customer approval
-POST   /api/v1/repairs/{id}/approve | /reject
-POST   /api/v1/repairs/{id}/parts                consumes stock
-POST   /api/v1/repairs/{id}/labour
-POST   /api/v1/repairs/{id}/complete | /deliver
-POST   /api/v1/repairs/{id}/invoice
-
-# Reporting
+# Finance and reporting (P7)
 GET    /api/v1/reports/sales-summary    ?from=&to=&groupBy=product|salesperson|branch
 GET    /api/v1/reports/stock-valuation
 GET    /api/v1/reports/receivables-ageing
-GET    /api/v1/reports/repair-turnaround
+GET    /api/v1/reports/repair-profitability   P6 already computes the per-job margin; this aggregates it
+GET    /api/v1/expenses                 POST — including the unabsorbed import cost P4 recorded and the
+                                        warranty repairs P6 costed but never billed
 ```
 
 ## 7. Cross-cutting

@@ -9,6 +9,7 @@ using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Domain.Purchasing;
+using TechStorePro.Domain.Repairs;
 using TechStorePro.Domain.Sales;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -88,6 +89,17 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<CreditNote> CreditNotes => Set<CreditNote>();
     public DbSet<CreditNoteLine> CreditNoteLines => Set<CreditNoteLine>();
     public DbSet<StoreCreditEntry> StoreCreditEntries => Set<StoreCreditEntry>();
+
+    // --- Repairs (P6) --------------------------------------------------------------------------
+    public DbSet<RepairTicket> RepairTickets => Set<RepairTicket>();
+    public DbSet<RepairStatusChange> RepairStatusChanges => Set<RepairStatusChange>();
+    public DbSet<RepairDiagnosis> RepairDiagnoses => Set<RepairDiagnosis>();
+    public DbSet<RepairPart> RepairParts => Set<RepairPart>();
+    public DbSet<RepairLabour> RepairLabour => Set<RepairLabour>();
+    public DbSet<RepairOutsourcing> RepairOutsourcings => Set<RepairOutsourcing>();
+    public DbSet<RepairCharge> RepairCharges => Set<RepairCharge>();
+    public DbSet<Warranty> Warranties => Set<Warranty>();
+    public DbSet<WarrantyClaim> WarrantyClaims => Set<WarrantyClaim>();
 
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 

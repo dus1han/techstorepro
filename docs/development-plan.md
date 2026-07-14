@@ -1,9 +1,20 @@
 # Development plan
 
-> Status: **P0–P5 complete.** Q6 and Q8 are answered (§45 D7, D8). The shop can sell: quote → order →
-> delivery → invoice → payment, a POS till, returns, credit notes and store credit — proven end to end
-> against a live API, not only by tests. **P6 (repairs) is next**: it needs P5's serial-to-invoice-line
-> binding, which is built and set.
+> Status: **P0–P6 complete.** The shop can buy, sell and repair, through screens rather than curl:
+> purchase order → goods receipt → landed cost → supplier invoice → payment; quote → order → delivery →
+> invoice → payment, plus a POS till, returns and store credit; and intake → diagnosis → customer approval
+> → parts → labour → outsourcing → collection → bill. All three paths are proven end to end against a live
+> API, not only by tests.
+>
+> **P6 closed the loop the whole design was pointing at.** A laptop sold in P5 comes back to the workshop
+> two years later and the system knows, without being told, that the repair is free — by walking the serial
+> back to the invoice line that sold it. That is why the delivery binds the serial, and it is why Sales had
+> to ship before Repairs.
+>
+> **P4 had been marked ✅ while half of it did not exist** — the entities and tables for purchase orders,
+> supplier invoices and supplier payments were real, but nothing above them was, so the FX gain the phase
+> describes had nowhere to be computed. That is closed; see P4 below for what was missing and why nobody
+> noticed. **P7 (finance, reporting, dashboard) is next**, and nothing blocks it.
 >
 > Phases are numbered P0–P9 and match [architecture.md §6](architecture.md). The earlier M0–M8
 > milestone numbering is gone: it mapped almost one-to-one, and keeping two schemes alive only
@@ -152,7 +163,7 @@ that the same serial cannot be sold twice, that a rolled-back transaction leaves
 the audit itself fails when a balance is corrupted behind the ledger's back** — in quantity *or* in
 cost. The cross-tenant gate grew to cover all ten new tenant-scoped tables.
 
-### P4 — Purchasing and imports ✅ done
+### P4 — Purchasing and imports ✅ done (closed properly on the second pass — see below)
 
 **Q2 is answered** (§45 **D6**): landed cost is apportioned **by value**, remainder to the largest line.
 The business's worked example became a test *before* the code, exactly as this plan demanded.
@@ -197,6 +208,48 @@ would never wash out), and an unabsorbed remainder is reported rather than hidde
 to the parent's navigation collection; EF's fixup had already done the latter, so every total computed
 from the in-memory graph — including an adjustment's `NetValue`, the money written off — was **double**.
 The database was correct; the documents were not. Fixed, with a regression test.
+
+#### P4 was marked done before it was ✅ closed for real
+
+This phase claimed purchase orders, supplier invoices and supplier payments, and shipped **none of
+them**. The domain entities and the eleven tables were real — `PurchaseOrder.Approve()`,
+`SupplierInvoice.Post()`, `SupplierPaymentAllocation.ExchangeGainOrLoss` all existed and were correct —
+but there was no command, no query, no handler and no endpoint above them. The only reachable purchasing
+operations were `POST /goods-receipts` and the import-shipment flow. **The FX gain the phase describes in
+detail had nowhere to be computed**, because nothing could record a supplier payment.
+
+It went unnoticed because the phase's tests exercised what existed (landed cost, receiving) and the
+screens that would have needed the rest were deferred with it. A phase is not done when its entities
+compile; it is done when the shop can use it.
+
+Now closed, and held to the same bar as P5:
+
+- **Purchase orders** — create, approve, cancel, list. Approve is a separate permission because it is
+  what commits the company's money, and it is the gate on receiving.
+- **Supplier invoices** — record, post, cancel. Posting is what puts the debt on the supplier's balance;
+  a draft owes nothing. It moves no stock, because the receipt already did.
+- **Supplier payments** — header, allocations, and **the FX gain, realised at last**.
+- **Read models** for all of the above, plus goods receipts, which previously could not even be listed.
+
+**The arithmetic that had to be got right.** A USD 1,000 invoice booked at 3.67 is a debt of AED 3,670.
+Paid at 3.60, only AED 3,600 leaves the bank. Subtract *what left the bank* from the supplier's balance —
+the obvious implementation — and AED 70 sits there for ever, on an invoice that is fully settled in the
+currency it was billed in. No amount of paying would ever clear it, because the residue is not a debt: it
+is the gain. So a settled invoice has exactly what it *added* taken back off (`Amount × InvoiceRate`), and
+the gain falls out as the difference — into the P&L, and **not** into the moving average. The laptops did
+not become cheaper to buy; the currency moved.
+
+**And a real bug, which only the live run found.** Receiving against an order ticked its lines off only
+when the caller named `purchaseOrderLineId` explicitly. Name the *order* and nothing more — as any
+reasonable client would — and the goods posted, the serials bound, and the order sat at `Approved` for
+ever: fully delivered, still showing as outstanding, and chased. Nothing errored. The tests passed,
+because they all named the line. An unnamed line is now matched on its product, and a genuinely ambiguous
+order (two lines, one product) is reported rather than guessed at.
+
+**Tests: 312 → 330**, and the whole path is proven against a live API: a container on the water, an order
+approved, ten laptops and a hundred cables landed at the goods price, AED 3,000 of freight folded in to
+give exactly 1,200 and 60, a USD invoice raised at 3.67, paid at 3.60 — AED 3,600 out of the bank, AED 70
+of gain, supplier balance **zero**, stock still at 1,200, and the P3 balance audit still reconciling.
 
 ### P5 — Sales ✅ done
 
@@ -268,13 +321,91 @@ invoice line; the return brought it back as `Returned` — **not** `InStock`, so
 someone inspects it; the store credit landed in its ledger with the customer's balance at exactly zero;
 and the P3 balance audit still agreed afterwards.
 
-### P6 — Repairs
+### P6 — Repairs ✅ done
 
-Intake, diagnosis, customer approval, parts consumption, labour, outsourced repair, warranty repairs
-linked to the original sale, delivery, invoicing, profitability.
+**Three questions had to be answered before the phase could be built** (§45 **D9**, **D10**, **D11**):
+when a part leaves stock, whether a warranty repair is free, and what a repair bill actually is. Each
+is a one-line decision and each would have been expensive to reverse.
 
-- Depends on P3 (parts come out of stock) and P5 (a warranty claim must find the invoice line that
-  sold the serial).
+**Delivered (9 new tables, 79 in total):**
+
+- **The job sheet, and the thing to hold on to about repairs: the device is not stock.** A customer's
+  laptop on the workshop bench is not inventory — the shop does not own it, cannot sell it, and must not
+  value it. So intake writes **no stock movement**. What moves is the parts fitted into it, and those
+  leave the shelf through `IStockLedger` like everything else.
+- **The workflow is a state machine, not a status column** (§28): `Received → Diagnosing →
+  AwaitingApproval → InRepair → Testing → Ready → Delivered`, with every transition written to
+  `repair_status_history` by the entity itself, so no handler can move a job and forget to say so.
+- **The approval gate is the point of the whole workflow.** Nothing may be fitted to a machine whose
+  owner has not agreed to the price — parts consumed against a job the customer then declines are parts
+  the shop has paid for and cannot bill. **A warranty job skips the gate**, because there is no price for
+  anyone to agree to; parking a free repair in "awaiting approval" would leave it waiting for a decision
+  nobody was ever going to be asked to make.
+- **Outsourced repair** (§29) — no stock moves (the device was never the shop's to move); what lands on
+  the ticket is a *cost*, in the vendor's currency at the rate on the day.
+- **Warranties and claims** (§30), and **the back-edge into Sales that this phase exists to prove**.
+
+**The back-edge, which is what P5 was building all along.** A machine on the counter, two years later, is
+traced to the sale that put it in the customer's hands: the serial → `Serial.SoldInvoiceLineId` → the
+invoice line → the invoice. **Intake asks the warranty question itself and stamps the answer on the job.**
+It is not a tickbox on a form, and that is deliberate — a tickbox is exactly how a shop ends up billing a
+customer for a repair it had already promised to do for free. The lookup reads *two* sources, because the
+system knows about warranties in two entirely different ways: the shop's own is **derived** (P5 computes
+it at the moment of sale from the product's warranty months and stamps it on the unit — nothing registers
+it), while a manufacturer's or a supplier's is **registered by hand**, because nobody can compute a term
+somebody was given on paper. Where both cover the machine the *manufacturer's wins*: if someone else will
+pay for the board, the shop should not be eating it out of its own provision. Getting that tie-break
+backwards costs real money and nobody would ever notice.
+
+**The arithmetic that had to be got right:**
+
+1. **A warranty repair is costed, not free** (D10). The customer's bill is zero; the cost is not. The
+   screen still left the shelf, so the job's gross profit comes out **negative — and it is supposed to**.
+   A warranty repair that booked no cost would make warranty look free, and the shop would never learn
+   which product line its warranty is quietly paying for. `is_chargeable` suppresses the *charge*, never
+   the *cost*.
+2. **Labour has no cost side, deliberately.** The technician's wage is a payroll expense (§34, P7), not a
+   cost this job caused — the shop pays it whether the bench is busy or idle. Apportioning a salary across
+   job sheets would invent a number the business never agreed to and make a quiet week show a loss on
+   every ticket.
+3. **The repair bill is an ordinary sales invoice** (D11), so it is paid, credited, chased and aged by
+   machinery that already exists and is proven. It moves no stock and carries the cost the ledger reported
+   when the part was *fitted* — not a fresh one, because by now the average has moved.
+
+**A real EF trap, found by the tests and worth writing down.** `BaseEntity` assigns the primary key in its
+initialiser, so a row discovered by EF through a **navigation collection** already has a key set — and EF
+reads a set key as *"this row exists"*, tracks it as `Modified`, and issues an UPDATE against a row that
+was never inserted. The status history would have vanished silently. This is the deeper reason behind the
+rule P4 wrote down as a comment and P6 now understands: **through the DbSet, and only the DbSet.** The
+domain still owns its history — `MoveTo` builds the row and appends it — but it *returns* it, and the
+handler adds it.
+
+**Tests: 330 → 358** (219 domain + 139 integration). Proven against a real Postgres: the part leaves the
+shelf when it is fitted and not when it is billed; a warranty claim walks back to the invoice line that
+sold the machine; a warranty job costs 120 and bills zero; rejecting a claim makes the job chargeable; a
+returned part goes back with a real movement; a job cannot be billed twice; a declined estimate sends the
+machine home with its serial back to `Sold` and **not** to `InStock` (which would put a customer's own
+laptop back on the shelf to be sold to someone else); the cross-tenant gate covers all nine new tables;
+**and the P3 balance audit still reconciles**, which is what proves repairs wrote no stock outside the
+ledger.
+
+**Verified end to end against a live API**, not only by tests — 22 checks, all green. A shop was onboarded,
+a laptop sold, and the same machine brought back: the counter check answered *"Shop warranty, sold on
+invoice INV-2026-00001, expires 14 Jul 2027"* without anybody telling it anything; the warranty job went
+straight to the bench, consumed a screen, billed nothing and showed its −120; a chargeable job refused the
+part until the customer approved, then came out at 500 charged, 120 cost, 380 margin, on a 525 invoice
+(tax-exclusive, D7); an outsourced board came back at USD 100 × 3.67 = AED 367; the customer's balance
+landed at exactly 2,100; and the balance audit still agreed afterwards.
+
+**The screens.** `features/repairs/{types, api, components}` — the shape P5 set, copied as promised. Two:
+the **workshop board** (open jobs first, *promised-date first within them*, because the job that is late is
+the one the shop needs to see) and **warranties & claims**. The buttons on a job are the transitions it can
+actually make — a status dropdown would let anyone move a job anywhere, and the rule that matters most
+would be enforced by whoever remembered. The intake dialog checks the warranty **as the serial is typed**
+and shows the answer in words the clerk can read out to the customer standing in front of them.
+
+**Not built: repair photos** (§28). They are attachments, and where attachments live is **Q9**, which is
+still open. Inventing a storage layer to answer it would be answering it. Recorded as debt below.
 
 ### P7 — Finance, reporting, dashboard
 
@@ -321,8 +452,9 @@ Recorded rather than hidden. Each has an owning phase; none is a reason to stop.
 | No rate limiting on `/auth/*` | Lockout blunts online brute force but not a distributed one. | **P9** |
 | Migrations applied by the API at start-up (Development) | Fine for one developer; two production instances starting together would race. | Before the first real deploy: a separate deploy step. |
 | Postgres RLS not enabled | The EF query filter is enforced centrally and proven by tests. RLS would stop even a raw SQL query that bypassed it. | Before production (database-design.md §1). |
-| **Frontend types still hand-written** | `types/*.ts` mirror the API by hand. A renamed API field compiles fine on the client and fails at runtime. **P3 added the `codegen` script** that generates them from `/openapi/v1.json`; the hand-written types are still what the app imports, so the drift is now *checkable* but not yet *impossible*. Rolled from P4, which built no screens. | **P5's screens** — the sales module is the first to be written against generated types, and the older files migrate behind it. |
-| **P4 and P5 have no screens** | The purchasing and sales modules are reachable only through the API. The business logic is proven by tests, but a shop cannot yet receive a container or serve a customer without curl. | **P5 slice 4** (sales), then a purchasing pass. |
+| **Frontend types still hand-written** | `types/*.ts` mirror the API by hand. A renamed API field compiles fine on the client and fails at runtime. **P3 added the `codegen` script** that generates them from `/openapi/v1.json`; the hand-written types are still what the app imports, so the drift is now *checkable* but not yet *impossible*. Rolled from P4 (which built no screens), then from P5, and **P6 added a third hand-written module to the pile**. Every phase that ships screens without closing it makes it more expensive to close. | **P7**, and it should stop being deferred — it is the oldest live debt in the project. |
+| **Repair photos not built** (§28) | A technician cannot attach the picture of the cracked screen the customer will later dispute — the one piece of evidence the intake notes exist to replace. This is a *scoped omission*, not an oversight: photos are attachments, and **where attachments live is Q9**, which is open. Building a storage layer to hold them would be answering Q9 by accident. | **Q9, then P9.** The rest of P6 does not depend on it. |
+| ~~**P4 and P5 have no screens**~~ | **Closed.** Sales landed its seven screens in P5 slice 4; purchasing now has its five — goods receipts, orders, supplier invoices, supplier payments, imports and landed cost. Closing it surfaced the larger problem: P4 had no *endpoints* for half of what it claimed either (see P4 above). | ✅ |
 | ~~Product delete does not check stock~~ | **Closed in P3.** Retiring a product now fails if it has stock on hand or live serials, and names the warehouses. | ✅ |
 | ~~Update/delete missing on some reference data~~ | **Closed in P3.** Brands, tax rates, price tiers, payment methods and discounts can now be edited and retired. A tax rate's **percent** is deliberately not editable — changing it in place would restate the tax on invoices already issued — so `POST /tax-rates/{id}/supersede` closes the old rate and opens its successor. | ✅ |
 | Migrations applied by the API at start-up (Development) | Two production instances starting together would race. The maintenance job is safe here (it only reads, and its writes are per-company and transactional), but the schema is not. | Before the first real deploy: a separate deploy step. |
@@ -379,16 +511,24 @@ service logs a warning at start-up saying exactly what stops happening if you do
 
 ## Immediate next steps
 
-1. **P6 — repairs.** Both its dependencies are now real: parts come out of stock through the ledger (P3),
-   and a warranty claim can find the invoice line that sold a serial (P5's `Serial.SoldInvoiceLineId`,
-   which is set at last). Nothing blocks it.
-2. **Give purchasing its screens.** P4's module is still reachable only through the API — a shop cannot
-   receive a container without curl. It should copy the `features/sales/` shape.
-3. **Migrate the frontend onto generated types.** The `codegen` script has existed since P3 and nothing
-   imports it. Sales is the natural first module to move, and the older hand-written files follow.
-4. **Decide what a zero credit limit means.** `Customer.WouldExceedCreditLimit` treats zero as
+1. **P7 — finance, reporting, dashboard.** Nothing blocks it, and three of its inputs are already computed
+   and waiting to be aggregated: P6's per-job margin (the §35 repair-profitability report is a `GROUP BY`
+   over numbers that already exist), P4's `import_shipments.unabsorbed_cost`, and the cost of every
+   warranty repair the shop has absorbed but never billed. All three are **expenses P7 owns**.
+2. **Migrate the frontend onto generated types.** The `codegen` script has existed since P3 and nothing
+   imports it. `features/{purchasing,sales,repairs}/types.ts` all mirror the API by hand, and a renamed
+   field would compile clean and fail at runtime. **This is now the oldest live debt, and it grew again in
+   P6** — every phase that ships screens without closing it makes it more expensive to close.
+3. **Decide what a zero credit limit means.** `Customer.WouldExceedCreditLimit` treats zero as
    *unlimited*, while the entity's own comment says zero means "cash only". Nothing exercised it until
    P5. It is a one-line change either way, but it is a business decision, not a technical one.
+4. **Answer Q9 (file storage), which now blocks a named feature.** §28's repair photos are the first thing
+   the product has promised and not delivered because of it. Until it is answered, a technician cannot
+   attach the picture of the cracked screen that the customer will later dispute.
+5. **Audit P7 against the P4 lesson.** P4 was marked ✅ with half its use-case layer missing, and the docs
+   asserted it for two phases. Before a phase is called done, check that every claim in its section has an
+   endpoint behind it — not merely an entity. P6 was held to that bar: every claim above was exercised
+   against a live API before this was written.
 
 ## Open questions that still block a phase
 

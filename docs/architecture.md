@@ -484,6 +484,20 @@ Repair workflow (§28): `Received → Diagnosis → Customer Approval → Repair
 Delivered`, enforced as a domain state machine with every transition written to
 `repair_status_history`.
 
+**Built in P6, as sketched, with two deviations worth recording:**
+
+- `repair_charges.invoice_id` is **not** nullable, and is **unique** per company. A charge row exists
+  precisely because an invoice was raised, so a null would mean nothing; and two charges pointing at one
+  invoice would mean two jobs billed on one document with no way to say which line belonged to which —
+  the profitability report would count the revenue twice.
+- `repair_labour` has an `hourly_rate` and **no cost rate**, which is the sketch's shape and is
+  deliberate — see §45 D10. The technician's wage is a payroll expense (§34), not a cost this job caused.
+
+**The device is never stock.** Nothing in this module writes `stock_movements` except the fitting of a
+part (`RepairConsumption`) and its return (`RepairReturn`), both through `IStockLedger` (§4.5). Intake,
+diagnosis, outsourcing and invoicing all move no stock at all — which is why the P3 balance audit still
+reconciles after a repair, and why that assertion is a test.
+
 ### 3.10 Finance
 
 ```
@@ -770,7 +784,7 @@ company B's ids, must get a 404 from every endpoint added in that phase.
 | **P3** ✅ | **Inventory — the spine.** Stock ledger (`IStockLedger` is the single door; every method requires an ambient transaction), balances locked and costed under that lock, serial lifecycle as a state machine, barcodes/QR + label printing, reservations, transfers, adjustments, stock counts, historical stock, **weighted-average costing**. The balance audit recomputes the cache from the ledger and runs nightly. **Done** — 142 tests. | ✅ clear |
 | **P4** ✅ | **Purchasing & imports.** PO (optional), GRN with serial capture, supplier invoices/payments, import shipments, **landed cost by value (D6)**, FX gain/loss on settlement. Goods and their cost do not arrive together, so charges fold in afterwards via a `Revaluation` movement. **Done** — 231 tests. | **Q2** ✅ answered (D6) |
 | **P5** | **Sales.** POS, quotes → orders → delivery (serial picking) → invoice, multi-method payments, returns, credit notes, store credit, discount approval. **Done** — 17 tables, 313 tests, seven screens. The delivery is the only sales document that moves stock, and it binds the serial. Verified end to end against a live API. | **Q6, Q8** ✅ answered (D7, D8) |
-| **P6** | **Repairs.** Intake, diagnosis, approval, parts (consumes P3 stock), labour, outsourced repair, warranty linked to the P5 sale, invoicing, profitability. | P3 + P5 |
+| **P6** ✅ | **Repairs.** Intake, diagnosis, customer approval, parts (consumes P3 stock through the ledger), labour, outsourced repair, warranty linked back to the P5 sale, invoicing, profitability. **Done** — 9 tables, 358 tests, two screens. **The device is not stock**: only the parts fitted to it move. The warranty back-edge is real — a serial on the counter is traced to the invoice line that sold it, and the job is stamped free or chargeable without anyone ticking a box. Verified end to end against a live API. | **D9, D10, D11** answered |
 | **P7** | **Finance, reporting, dashboard.** AR/AP ageing, statements, cash/bank, expenses, computed P&L, the §35 report set, §36 dashboard, §37 global search. | ✅ clear |
 | **P8** | **SaaS platform.** Plans, subscriptions, entitlement enforcement, billing, invoices, platform admin console, onboarding. | **Q7 (payment gateway)** |
 | **P9** | **Hardening & integrations.** Backup/restore (§43), rate limiting, RLS defence-in-depth, Excel import/export (§42), integration API surface (§44). | — |

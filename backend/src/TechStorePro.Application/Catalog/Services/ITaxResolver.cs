@@ -37,4 +37,16 @@ public interface ITaxResolver
         Guid productId,
         DateTimeOffset? asOf = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The company's default rate, for a line that has no product to take one from — an hour of a
+    /// technician's labour (P6), a callout fee, a delivery charge.
+    ///
+    /// It exists because the alternative is letting the caller pass the percentage in, and a client that
+    /// can choose the tax rate is a client that can choose zero. The tax on a repair bill is not the till
+    /// operator's decision; it is the company's configuration, and this is where that is read.
+    /// </summary>
+    Task<ResolvedTax> ResolveDefaultAsync(
+        DateTimeOffset? asOf = null,
+        CancellationToken cancellationToken = default);
 }

@@ -2,18 +2,36 @@
 
 Multi-company SaaS ERP for a computer **sales**, **import** and **repair** business.
 
-**Phases P0–P5 are complete.** A company is onboarded by TechStorePro; its
+**Phases P0–P6 are complete.** A company is onboarded by TechStorePro; its
 staff sign in as `username@COMPANY`, hold permissions granted feature by feature, and leave an audit
 trail behind every change. The shop keeps a full catalogue, prices it properly (a wholesale customer and
 a walk-in are quoted different prices, and the system reports which price list it used), holds stock in a
-locked ledger, buys goods with landed cost — **and now sells them.**
+locked ledger — and **buys, sells and repairs through screens, not curl.**
 
-Quote → order → delivery → invoice → payment, plus a POS till, returns, credit notes and store credit.
-The delivery is the only sales document that moves stock, and it is where the serial binds: that is what
-will let a warranty claim in P6 find the invoice line that sold a given laptop, two years from now.
+**Buying:** purchase order → goods receipt → landed cost → supplier invoice → payment. The goods receipt
+is the only purchasing document that moves stock, and it is where the serial is captured. A container's
+freight arrives *after* its goods do, so the landed cost is folded in afterwards — once, and never twice.
+Paying a USD invoice at a rate the dirham has moved to realises a genuine FX gain, which goes to the P&L
+and **not** into the cost of the stock: the laptops did not become cheaper to buy.
 
-The remaining work — repairs, finance, the SaaS platform — is sequenced in
-[docs/development-plan.md](docs/development-plan.md). **P6 (repairs) is next.**
+**Selling:** quote → order → delivery → invoice → payment, plus a POS till, returns, credit notes and
+store credit. The delivery is the only sales document that moves stock, and it is where the serial binds.
+
+**Repairing:** intake → diagnosis → customer approval → parts → labour → outsourcing → collection → bill.
+**The customer's device is not stock** — the shop does not own it, cannot sell it and must not value it —
+so only the parts fitted into it ever move on the ledger, and nothing may be fitted until the customer has
+agreed to the price.
+
+**And this is where the serial binding pays off.** A laptop sold last year comes back to the counter, and
+the system works out for itself that the repair is free: it walks the serial back to the invoice line that
+sold it and answers *"Shop warranty, sold on invoice INV-2026-00001, expires 14 Jul 2027"* — in words the
+clerk can read out to the customer standing in front of them. Nobody ticks a box, because a tickbox is how
+a shop ends up billing someone for a repair it had already promised to do for nothing. A warranty repair
+still **costs**: the parts left the shelf, so the job shows the loss, and the shop can finally see which
+product line its warranty is quietly paying for.
+
+The remaining work — finance and reporting, the SaaS platform, hardening — is sequenced in
+[docs/development-plan.md](docs/development-plan.md). **P7 (finance, reporting, dashboard) is next.**
 
 ## Stack
 
@@ -53,8 +71,8 @@ TechStorePro/
 ├── frontend/                    Next.js app
 │   └── src/
 │       ├── app/                 routes (App Router)
-│       ├── components/          shared UI; ui/ primitives, layout/ shell
-│       ├── features/            one folder per business module (none yet)
+│       ├── components/          shared UI; ui/ primitives, layout/ shell, data/ table + form
+│       ├── features/            one folder per business module — sales/, purchasing/
 │       ├── lib/                 api-client, env, utils
 │       └── types/               API contract types
 │

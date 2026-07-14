@@ -4,6 +4,7 @@ using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Domain.Purchasing;
+using TechStorePro.Domain.Repairs;
 using TechStorePro.Domain.Sales;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -67,6 +68,20 @@ public interface IApplicationDbContext
     /// would be a figure nobody could explain.
     /// </summary>
     DbSet<StoreCreditEntry> StoreCreditEntries { get; }
+
+    // --- Repairs (P6) --------------------------------------------------------------------------
+    //
+    // The customer's device is not stock and never becomes it (see RepairTicket). The only thing here
+    // that moves goods is the part fitted into the machine, and it goes through IStockLedger.
+    DbSet<RepairTicket> RepairTickets { get; }
+    DbSet<RepairStatusChange> RepairStatusChanges { get; }
+    DbSet<RepairDiagnosis> RepairDiagnoses { get; }
+    DbSet<RepairPart> RepairParts { get; }
+    DbSet<RepairLabour> RepairLabour { get; }
+    DbSet<RepairOutsourcing> RepairOutsourcings { get; }
+    DbSet<RepairCharge> RepairCharges { get; }
+    DbSet<Warranty> Warranties { get; }
+    DbSet<WarrantyClaim> WarrantyClaims { get; }
 
     /// <summary>
     /// Requests the API has already answered. Written by <c>IdempotencyFilter</c>, and by nothing else —

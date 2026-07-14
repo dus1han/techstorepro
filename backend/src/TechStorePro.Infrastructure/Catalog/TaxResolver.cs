@@ -46,6 +46,15 @@ public class TaxResolver : ITaxResolver
             }
         }
 
+        return await ResolveDefaultAsync(at, cancellationToken);
+    }
+
+    public async Task<ResolvedTax> ResolveDefaultAsync(
+        DateTimeOffset? asOf = null,
+        CancellationToken cancellationToken = default)
+    {
+        var at = asOf ?? _clock.UtcNow;
+
         var fallback = await _db.TaxRates
             .AsNoTracking()
             .Where(r => r.IsDefault && r.IsActive && r.ValidFrom <= at

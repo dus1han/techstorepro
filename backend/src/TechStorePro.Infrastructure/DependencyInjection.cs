@@ -3,6 +3,7 @@ using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Application.Identity.Services;
 using TechStorePro.Application.Inventory.Barcodes;
 using TechStorePro.Application.Inventory.Services;
+using TechStorePro.Application.Repairs.Services;
 using TechStorePro.Application.Sales.Services;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Infrastructure.Catalog;
@@ -10,6 +11,7 @@ using TechStorePro.Infrastructure.Configuration;
 using TechStorePro.Infrastructure.Identity;
 using TechStorePro.Infrastructure.Inventory;
 using TechStorePro.Infrastructure.Persistence;
+using TechStorePro.Infrastructure.Repairs;
 using TechStorePro.Infrastructure.Sales;
 using TechStorePro.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
@@ -88,6 +90,12 @@ public static class DependencyInjection
         // endpoint and the nightly job — a job with its own copy of the arithmetic could pass while
         // the endpoint failed, and "the nightly job is green" would then mean nothing.
         services.AddScoped<IBalanceAuditor, BalanceAuditor>();
+
+        // P6 — the warranty question, answered at the workshop door: is this repair free, and who is
+        // paying? It reads two sources (the shop's own warranty, derived by P5 at the moment of sale; and a
+        // manufacturer's or supplier's, registered by hand), because the system knows about the two in
+        // entirely different ways. See IWarrantyLookup.
+        services.AddScoped<IWarrantyLookup, WarrantyLookup>();
 
         // Sweeps expired reservations and proves the balances against the ledger, per company, forever.
         // Without it, requirements §20's "release reservation" has no answer for the reservations that
