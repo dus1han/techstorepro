@@ -34,6 +34,19 @@ const NAV: { section: string; items: NavItem[] }[] = [
     ],
   },
   {
+    section: "Sales",
+    items: [
+      // The till first: it is the screen the shop lives in all day.
+      { href: "/sales/pos", label: "Point of sale", feature: FEATURES.salesInvoices },
+      { href: "/sales/quotations", label: "Quotations", feature: FEATURES.quotations },
+      { href: "/sales/orders", label: "Sales orders", feature: FEATURES.salesOrders },
+      { href: "/sales/deliveries", label: "Deliveries", feature: FEATURES.deliveries },
+      { href: "/sales/invoices", label: "Invoices", feature: FEATURES.salesInvoices },
+      { href: "/sales/payments", label: "Payments", feature: FEATURES.customerPayments },
+      { href: "/sales/credit-notes", label: "Returns & credit notes", feature: FEATURES.creditNotes },
+    ],
+  },
+  {
     section: "Inventory",
     items: [
       { href: "/inventory/stock", label: "Stock on hand", feature: FEATURES.stock },

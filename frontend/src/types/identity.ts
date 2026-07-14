@@ -61,6 +61,22 @@ export const FEATURES = {
   reservations: "inventory.reservations",
   serials: "inventory.serials",
   barcodes: "inventory.barcodes",
+
+  // P4 — purchasing
+  purchaseOrders: "purchasing.orders",
+  goodsReceipts: "purchasing.receipts",
+  supplierInvoices: "purchasing.invoices",
+  supplierPayments: "purchasing.payments",
+  importShipments: "purchasing.imports",
+
+  // P5 — sales. Approve on invoices is what authorises a price below the price list's floor (§32);
+  // approve on credit notes authorises giving money back.
+  quotations: "sales.quotations",
+  salesOrders: "sales.orders",
+  deliveries: "sales.deliveries",
+  salesInvoices: "sales.invoices",
+  customerPayments: "sales.payments",
+  creditNotes: "sales.credit_notes",
 } as const;
 
 export interface Permission {

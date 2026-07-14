@@ -5,6 +5,7 @@ using TechStorePro.Application.Sales.Invoices;
 using TechStorePro.Application.Sales.Orders;
 using TechStorePro.Application.Sales.Payments;
 using TechStorePro.Application.Sales.Pos;
+using TechStorePro.Application.Sales.Queries;
 using TechStorePro.Application.Sales.Quotations;
 using TechStorePro.Application.Sales.Returns;
 using TechStorePro.Application.Sales.Services;
@@ -874,6 +875,32 @@ public class SalesTests : IAsyncLifetime
         line.DiscountPercent.Should().Be(10m);
         line.NetTotal.Should().Be(72m);
         line.TaxAmount.Should().Be(3.60m);
+    }
+
+    [Fact]
+    public async Task The_invoice_list_reports_what_is_still_owed()
+    {
+        // The screen that takes a payment reads this. If the query forgot to load the allocations, every
+        // invoice would come back reading as fully unpaid — and the shop would chase customers who had
+        // already paid, using a figure that looked entirely authoritative.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var invoiceId = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 2m, null)));  // 168
+        await PayAsync(db, _customer, [new TenderLine(_cash, 100m)], [new AllocationLine(invoiceId, 100m)]);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var page = await new GetInvoicesQueryHandler(fresh)
+            .Handle(new GetInvoicesQuery(), CancellationToken.None);
+
+        var invoice = page.Items.Single();
+
+        invoice.Total.Should().Be(168m);
+        invoice.PaidAmount.Should().Be(100m);
+        invoice.OutstandingAmount.Should().Be(68m);
+        invoice.Status.Should().Be(SalesInvoiceStatus.PartiallyPaid);
     }
 
     // --- Returns and credit notes (requirements §24) -------------------------------------------------

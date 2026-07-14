@@ -398,6 +398,11 @@ public record SalesInvoiceDto(
     decimal Total,
     decimal CostTotal,
     decimal GrossProfit,
+
+    /// <summary>Received against this invoice, and what is still owed. The screen that takes a payment
+    /// needs both, and having it infer them from the status would be a guess.</summary>
+    decimal PaidAmount,
+    decimal OutstandingAmount,
     string? Notes,
     IReadOnlyCollection<InvoiceLineDto> Lines);
 
@@ -488,6 +493,11 @@ internal static class SalesInvoiceMapping
     public static IQueryable<SalesInvoice> WithGraph(IQueryable<SalesInvoice> query) =>
         query
             .Include(i => i.Customer)
+
+            // The allocations, because PaidAmount is computed from them. Without this Include they load
+            // as an empty collection and every invoice reads as unpaid — a receivables report that would
+            // chase customers who have already paid.
+            .Include(i => i.Allocations)
             .Include(i => i.Lines).ThenInclude(l => l.DeliveryLine!).ThenInclude(dl => dl.Serials);
 
     public static SalesInvoiceDto ToDto(SalesInvoice i) => new(
@@ -507,6 +517,8 @@ internal static class SalesInvoiceMapping
         i.Total,
         i.CostTotal,
         i.GrossProfit,
+        i.PaidAmount,
+        i.OutstandingAmount,
         i.Notes,
         i.Lines.Select(l => new InvoiceLineDto(
             l.Id,
