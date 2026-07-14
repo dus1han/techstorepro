@@ -309,6 +309,109 @@ repair_charges       id, repair_ticket_id, invoice_id (null)   -- null until inv
 `warranty_invoice_line_id` links a warranty repair back to the sale. When set, parts and labour
 are still costed (so the warranty's true cost is visible) but not charged.
 
+### Finance — cash, bank and expenses (P7 slice 2)
+
+Four tables, taking the built schema from 79 to 83, plus one nullable column on `payment_methods`.
+
+```
+financial_accounts   id, company_id, name, kind (1=Cash, 2=Bank), currency_code,
+                     branch_id (NULL = company-wide), bank_name, account_number,
+                     allows_overdraft, is_active, notes
+                     -- unique (company_id, name) where is_deleted = false
+                     -- index (company_id, kind, is_active)
+                     -- NO balance column. See below — this is the whole design.
+account_transactions id, company_id, financial_account_id, branch_id (null),
+                     source, source_id (null), source_number, amount (SIGNED),
+                     exchange_rate, occurred_at, reference, description
+                     -- index (company_id, financial_account_id, occurred_at)  <- every balance is
+                     --   a SUM over this, and the statement reads the same rows in date order
+                     -- index (company_id, source, source_id)  <- walk a statement row back to the
+                     --   document behind it; used when an expense is cancelled
+expense_categories   id, company_id, name, description, is_active
+                     -- unique (company_id, name) where is_deleted = false
+expenses             id, company_id, number, expense_category_id, branch_id,
+                     financial_account_id, supplier_id (null), description, amount,
+                     currency_code, exchange_rate, expense_date, reference,
+                     status (1=Recorded, 2=Cancelled), cancelled_at, cancelled_reason, notes
+                     -- unique (company_id, number) where is_deleted = false
+                     -- index (company_id, expense_date, expense_category_id) — the P&L reads
+                     --   expenses by date and groups them by category (§35)
+
+payment_methods      + financial_account_id uuid NULL references financial_accounts(id)
+```
+
+Every FK is `ON DELETE RESTRICT`. `amount_base` (`amount × exchange_rate`) is **computed, never stored** —
+a third column that can disagree with the two it comes from.
+
+**`financial_accounts` has no balance column, and that is deliberate.** The balance is
+`SUM(account_transactions.amount)`. The contrast with `stock_balances` is not an inconsistency: a stock
+balance carries the **weighted average**, which is genuinely derived state that has to be recomputed
+under a lock as each movement lands, so it is cached and must prove itself nightly. A cash balance is a
+plain sum, and Postgres can add up a column. The consequence shows up in the reports: the receivables and
+payables reports of P7 slice 1 each return a `variance`, because `Customer.Balance` and `Supplier.Balance`
+are hand-maintained caches that can drift. **The cash position carries no variance — there is no cache for
+it to disagree with.** "Why does the till say 4,300?" is answered by reading the rows that put it there.
+
+**`account_transactions.amount` is signed** (+ in, − out), so the balance is a `SUM` and cannot be got
+wrong by adding the wrong pair of columns. Same reasoning as `store_credit_entries`.
+
+**The amount is what the *account* lost or gained, in the account's own currency.** This is the one thing
+in the table that is easy to get wrong. A USD 1,000 supplier invoice booked at 3.67 is a debt of AED 3,670
+— that is what came off `Supplier.Balance`. Paid at 3.60, the bank hands over **AED 3,600**, and AED 3,600
+is what this table records. The AED 70 is a realised FX gain: it is P&L, it is **not money**, and it never
+entered or left any account. Book 3,670 here instead and the system's bank balance disagrees with the real
+bank by 70 dirhams — for ever, on every foreign bill the shop ever pays, growing, and with nothing in the
+system able to explain it. `exchange_rate` on the row is the account's currency into base, and exists only
+so a dirham till and a dollar bank account can be totalled; it has nothing to do with the rate on the
+document that caused the movement.
+
+**`IAccountLedger` is the single door into `account_transactions`** — nothing else may write it, exactly as
+`IStockLedger` is the only door into `stock_movements` (architecture.md §4.5 states that rule for stock; it
+now covers money too). Every method **requires an ambient transaction and throws without one**: money never
+moves alone — a payment also settles invoices, an expense also takes a number — and a ledger that committed
+by itself would leave the bank debited and the expense that debited it rolled back. It locks the account row
+(`SELECT … FOR UPDATE`) before summing, so two clerks cannot both pay out the last 500 in the drawer. That
+is "prevent overselling", in cash, and it fails the same way without the lock.
+
+It needs **no `INSERT … ON CONFLICT` upsert first**, unlike `StockLedger`: an account is created deliberately
+by a human before any money can move through it, so the row is always there to lock. A stock balance row is
+created by whichever receipt happens to land first, which is why that ledger has to materialise the row
+before it can lock it. (The overdraw check does have to add the ledger's own *pending* rows to the database
+sum — a handler emptying an account in two movements would otherwise check the second against a balance that
+still contains the first. `StockLedger` gets that free from the tracked balance row; a ledger with no cache
+has to do it by hand.)
+
+**A cash account cannot be overdrawn.** `allows_overdraft` is refused for `Kind = Cash`: a bank may lend the
+shop money, a drawer may not, and an overdrawn till is a counting error rather than a debt. A bank account
+may carry one.
+
+**A transfer writes two movements, never one** — `TransferOut` and `TransferIn`, each leg pointing at the
+other. Same reasoning as a stock transfer: one row with a *from* and a *to* would make each account's
+statement depend on the other's, and the money would belong to both ends at once. Where the two accounts hold
+different currencies the shop types **what actually landed**, rather than the system inferring it from a rate
+— a rate is right to six decimal places and wrong by whatever the bank charged for the conversion, and it is
+the bank statement, not the FX table, that this account has to reconcile against.
+
+**An expense is recorded and paid in one act.** No draft, no accrual — there is no general ledger to accrue
+into (§45 D3), and an expense that had not left an account would be a *bill*, which is a `supplier_invoice`
+and already ages. It is denominated in the **account's** currency: you cannot spend dollars out of a dirham
+account, and letting the two differ would put a number on the document that disagrees with the money that
+moved, with no way to say which was true. `supplier_id` is optional and puts **nothing** on the supplier's
+balance — this is money already gone, not a debt, and treating it as one would count it twice.
+
+**An expense is cancelled, never edited or deleted.** The amount, account and date of a paid expense are
+facts about money that has left; editing them in place would silently restate a bank balance somebody has
+already reconciled. `Cancel` writes a reversing `ExpenseCancellation` movement, and both rows stay on the
+statement — which is exactly what an auditor is looking for.
+
+**`payment_methods.financial_account_id` is nullable, and null means two different things.** For
+`StoreCredit` it is *required* to be null: spending a voucher moves no money — the shop took that money when
+the goods came back, and it is in the till already — so writing an account transaction would put the same
+notes in the drawer twice, and the till would come up over by every credit ever issued. For every other kind,
+null means **unconfigured**, and a payment tendered through it is **refused** rather than silently banked
+nowhere. It is nullable rather than required because the column landed on a table that already had rows in
+it, and a tender that no account can hold is a contradiction the shop resolves, not one a migration guesses at.
+
 ## 4. Indexing
 
 Every tenant-scoped table gets `(company_id)` as the leading column of its indexes:
@@ -318,6 +421,7 @@ create index ix_products_company_sku          on techstorepro.products (company_
 create index ix_stock_movements_company_prod  on techstorepro.stock_movements (company_id, product_id, occurred_at desc);
 create index ix_invoices_company_customer     on techstorepro.invoices (company_id, customer_id, issued_at desc);
 create index ix_repair_tickets_company_status on techstorepro.repair_tickets (company_id, status, received_at desc);
+create index ix_account_txn_company_account  on techstorepro.account_transactions (company_id, financial_account_id, occurred_at);
 create unique index ux_serials_company_serial on techstorepro.serials (company_id, serial_no);
 ```
 

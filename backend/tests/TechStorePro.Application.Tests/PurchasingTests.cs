@@ -8,10 +8,12 @@ using TechStorePro.Application.Purchasing.Payments;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Exceptions;
+using TechStorePro.Domain.Finance;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Domain.Purchasing;
 using TechStorePro.Infrastructure.Configuration;
+using TechStorePro.Infrastructure.Finance;
 using TechStorePro.Infrastructure.Inventory;
 using TechStorePro.Infrastructure.Persistence;
 using FluentAssertions;
@@ -96,12 +98,26 @@ public class PurchasingTests : IAsyncLifetime
 
         seed.Products.AddRange(laptop, cable);
 
+        // P7: the money has to leave from somewhere. The bank carries an overdraft, as a real one does —
+        // these tests are about landed cost and FX, not about whether the shop can afford the container.
+        var bank = new FinancialAccount
+        {
+            CompanyId = company.Id,
+            Name = "Bank",
+            Kind = FinancialAccountKind.Bank,
+            CurrencyCode = "AED",
+            AllowsOverdraft = true
+        };
+
+        seed.FinancialAccounts.Add(bank);
+
         var bankTransfer = new PaymentMethod
         {
             CompanyId = company.Id,
             Name = "Bank transfer",
             Kind = PaymentMethodKind.BankTransfer,
-            RequiresReference = true
+            RequiresReference = true,
+            FinancialAccountId = bank.Id
         };
 
         seed.PaymentMethods.Add(bankTransfer);
@@ -822,7 +838,7 @@ public class PurchasingTests : IAsyncLifetime
 
         var invoiceId = await RecordInvoiceAsync(db, total: 1_000m);
 
-        var handler = new PaySupplierCommandHandler(db, Numbers(db), new StubClock());
+        var handler = new PaySupplierCommandHandler(db, Tenant(), Accounts(db), Numbers(db), new StubClock());
 
         var act = async () => await handler.Handle(
             new PaySupplierCommand(
@@ -927,7 +943,7 @@ public class PurchasingTests : IAsyncLifetime
         string currency = "AED",
         decimal rate = 1m)
     {
-        var handler = new PaySupplierCommandHandler(db, Numbers(db), new StubClock());
+        var handler = new PaySupplierCommandHandler(db, Tenant(), Accounts(db), Numbers(db), new StubClock());
 
         return await handler.Handle(
             new PaySupplierCommand(
@@ -1025,8 +1041,13 @@ public class PurchasingTests : IAsyncLifetime
             new StubClock(),
             new WeightedAverageCosting());
 
+    private AccountLedger Accounts(ApplicationDbContext db) =>
+        new(new ApplicationDbContextAccessor(db), db, new StubTenant(_companyA), new StubClock());
+
     private DocumentNumberGenerator Numbers(ApplicationDbContext db) =>
         new(new ApplicationDbContextAccessor(db), db, new StubTenant(_companyA), new StubClock());
+
+    private StubTenant Tenant() => new(_companyA);
 
     private ApplicationDbContext CreateContext(Guid? companyId)
     {

@@ -1,6 +1,7 @@
 using TechStorePro.Domain.Auditing;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
+using TechStorePro.Domain.Finance;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Domain.Purchasing;
@@ -82,6 +83,20 @@ public interface IApplicationDbContext
     DbSet<RepairCharge> RepairCharges { get; }
     DbSet<Warranty> Warranties { get; }
     DbSet<WarrantyClaim> WarrantyClaims { get; }
+
+    // --- Finance (P7) --------------------------------------------------------------------------
+    //
+    // AccountTransactions is exposed for *reading*. Writing it is the exclusive business of
+    // IAccountLedger — a handler that appends a movement by hand bypasses the account lock and the
+    // overdraw check at once, and the till would pay out money it does not hold. Same rule as
+    // IStockLedger and stock_movements (architecture.md §4.5).
+    //
+    // Note what is missing: there is no balance to cache. A FinancialAccount holds no total, so unlike
+    // stock there is nothing here that can drift away from the movements beneath it.
+    DbSet<FinancialAccount> FinancialAccounts { get; }
+    DbSet<AccountTransaction> AccountTransactions { get; }
+    DbSet<ExpenseCategory> ExpenseCategories { get; }
+    DbSet<Expense> Expenses { get; }
 
     /// <summary>
     /// Requests the API has already answered. Written by <c>IdempotencyFilter</c>, and by nothing else —

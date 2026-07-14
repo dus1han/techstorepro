@@ -193,7 +193,8 @@ Updates to documents carry a `rowVersion`; a mismatch is a `409`, not a silent o
 ## 6. Endpoints
 
 Grouped by module, in build order. **P1–P6 are built** (identity, master data, inventory, purchasing,
-sales, repairs); finance and the SaaS platform are still planned.
+sales, repairs), and **P7 is landing**: receivables, payables and statements (slice 1), then cash, bank
+and expenses (slice 2). The SaaS platform is still planned.
 
 ```
 # Master data — built (P2), reference-data edit/retire added in P3
@@ -384,6 +385,50 @@ POST   /api/v1/warranties/claims/{id}/accept
 POST   /api/v1/warranties/claims/{id}/reject   THE DECISION THAT MAKES THE JOB CHARGEABLE. The parts and
                                         labour already booked as warranty work become billable, and the
                                         shop stops eating them. A reason is mandatory.
+
+# Finance — cash, bank and expenses. Built (P7 slice 2). §33, §34.
+GET    /api/v1/finance/accounts         ?includeInactive=   the tills and the bank accounts, each with the
+                                        balance SUMMED FROM ITS MOVEMENTS. There is no balance column.
+POST   /api/v1/finance/accounts         open a till or a bank account. `openingBalance` is what was already
+                                        in it, and it is posted as a MOVEMENT, not written as a field: a
+                                        number typed onto the account itself would be a figure with no date,
+                                        no author and no explanation, sitting outside the ledger every other
+                                        figure in this module comes from.
+PUT    /api/v1/finance/accounts/{id}    rename it, fix the bank details, grant or withdraw an overdraft.
+                                        NOT the currency and NOT the kind: an AED till holding 4,300 does not
+                                        become a USD till holding 4,300 because somebody changed a dropdown.
+                                        Deactivating an account that still holds money is refused — it would
+                                        drop out of the cash position while still being in the drawer.
+GET    /api/v1/finance/accounts/{id}/statement   ?from=&to=   opening balance, every movement, running
+                                        balance, closing balance. `opening` is EVERYTHING BEFORE THE WINDOW,
+                                        not the account's OpeningBalance row — a statement for June opens
+                                        with what was there on the 1st of June.
+POST   /api/v1/finance/accounts/transfer   bank the till; take a float to the second shop. TWO MOVEMENTS,
+                                        never one (same reasoning as a stock transfer). Across currencies
+                                        `amountIn` is MANDATORY and is what the receiving bank actually
+                                        credited — not a converted figure. A rate would be right to six
+                                        decimals and wrong by whatever the bank charged, and it is the bank
+                                        statement this account reconciles against. Carries `Approve`: opening
+                                        an account moves no money, moving money between two does.
+
+GET    /api/v1/finance/expenses         ?from=&to=&expenseCategoryId=&branchId=&financialAccountId=&status=
+GET    /api/v1/finance/expenses/summary ?from=&to=&branchId=   by category — the figure the computed P&L
+                                        will subtract
+POST   /api/v1/finance/expenses         RECORDED AND PAID IN ONE ACT. No draft, no accrual — there is no
+                                        general ledger to accrue into (§45 D3), and an expense that had not
+                                        left an account would be a bill, which is a supplier invoice and
+                                        already ages. The money leaves the named account through
+                                        IAccountLedger, so a till cannot pay out what it does not hold.
+                                        The amount is IN THE ACCOUNT'S CURRENCY. `supplierId` is optional and
+                                        puts NOTHING on the supplier's balance: this money has gone.
+POST   /api/v1/finance/expenses/{id}/cancel   NOT a delete and NOT an edit. Editing a paid expense would
+                                        silently restate a bank balance somebody has already reconciled.
+                                        A reversing movement is written and BOTH rows stay on the statement.
+                                        Reason mandatory.
+
+GET    /api/v1/finance/expense-categories   POST, PUT /{id} — the shop's own list. §34's own list ends in
+                                        "other expenses", and a fixed enum would make every shop's fifth
+                                        category "Other" for ever.
 ```
 
 **Send an `Idempotency-Key` on `/pos/sales` and `/customer-payments`.** A double-clicked till would
@@ -414,6 +459,57 @@ invoice arrived, there is no stock left to carry that cost: the remainder is rep
 the shipment, rather than silently dropped (which would overstate margin) or smeared over whatever else
 is on the shelf (which would charge one container's freight to another's goods).
 
+### There is no endpoint that sets a balance
+
+Look for it in the finance block above: there is nothing that writes a figure onto an account. There
+cannot be — **an account holds no balance to set.** What it holds is the sum of its movements, and every
+movement is written by `IAccountLedger` on behalf of a document: a payment, a refund, an expense, a
+transfer, an opening balance. An "adjust the balance" endpoint would be a licence to conjure cash out of
+nothing, and the statement would show the money arriving as nobody's decision.
+
+The same rule the stock ledger has, applied to money: nothing writes `account_transactions` except the one
+door, and everything that goes through it names the act that caused it.
+
+**Three new permission features**, and the actions are chosen rather than copied:
+
+| Feature | Actions | Why |
+| --- | --- | --- |
+| `finance.accounts` | View, Create, Edit, Delete, **Approve** | Opening an account moves no money. The **transfer** does, and that is what `Approve` guards. |
+| `finance.expenses` | View, Create, Edit, Delete | The one write in the system that takes money out of the bank with **no counterparty document** — no supplier invoice, no goods, no customer. Nothing downstream can catch a wrong one, so `Create` *is* the control, exactly as it is for a stock adjustment. |
+| `finance.expense_categories` | View, Create, Edit, Delete | Reference data. |
+
+`GET /reports/cash-position` reads `finance.accounts` × `View` — it is the same money, so it is the same grant.
+
+### What P7 slice 2 changed on endpoints that already existed
+
+Money has to *land* somewhere, and until now it did not. Every one of these fields is what stops a payment
+being money that arrived nowhere — a shop whose cash position was short by every sale it ever took.
+
+- **`TenderLine` gains an optional `financialAccountId`** (`POST /customer-payments`, `POST /pos/sales`).
+  Omitted, the tender lands in the account configured on its **payment method** — which is the normal case
+  and the reason the method carries one. It is on the line, not the header, because cash and card on one
+  sale go into two different places.
+- **`IssueCreditNoteCommand` gains `refundFromAccountId`**, and it is **required for `CashRefund` and
+  `BankRefund`** — those hand money back, and money handed back has to come out of somewhere nameable. It
+  must be **absent** for an offset (which moves no money, only the balance) and for store credit (which is
+  a promise, not a payment).
+- **`PaySupplierCommand` gains an optional `financialAccountId`** — which account the money actually left.
+  Defaults to the payment method's. Note what is *not* affected: `exchangeRate` still fixes the FX result
+  against the invoice, and the account is debited with **what the bank handed over**, not what the invoice
+  was booked at. See below.
+- **`POST`/`PUT /api/v1/payment-methods` gain `financialAccountId`.** Null means two different things. For
+  **store credit it is required to be null** — spending a voucher moves no money, because the shop took
+  that money when the goods came back and it is in the till already; an account transaction would put the
+  same notes in the drawer twice. For **every other kind null means unconfigured**, and a payment tendered
+  through it is **refused** rather than silently banked nowhere.
+
+**A movement records what the account lost or gained, in the account's own currency.** A USD 1,000 supplier
+invoice booked at 3.67 is a debt of AED 3,670 — that is what comes off `Supplier.Balance`. But the bank
+hands over **AED 3,600**, and 3,600 is what `account_transactions` records. The AED 70 is a realised FX
+gain: it is P&L, it is **not money**, and it never entered or left any account. Book 3,670 there instead and
+the system's bank balance disagrees with the real bank by 70 dirhams, for ever, on every foreign bill the
+shop ever pays.
+
 ### Reports (P7)
 
 ```
@@ -421,12 +517,13 @@ GET    /api/v1/reports/receivables-ageing        ?asOf=&customerId=&branchId=
 GET    /api/v1/reports/payables-ageing           ?asOf=&supplierId=
 GET    /api/v1/reports/customer-statement/{id}   ?from=&to=
 GET    /api/v1/reports/supplier-statement/{id}   ?from=&to=
+GET    /api/v1/reports/cash-position             ?asOf=      every till and bank account, and one total
 ```
 
-Read-only, all four — `View` and `Export` and nothing else, on two new features (`reports.receivables`,
-`reports.payables`). There is no `Create` on a report.
+Read-only, all five — `View` and `Export` and nothing else, on two new features (`reports.receivables`,
+`reports.payables`) plus `finance.accounts` for the cash position. There is no `Create` on a report.
 
-**Each one returns a `variance`, and it is the field to look at first.** `Customer.Balance` and
+**Each of the first four returns a `variance`, and it is the field to look at first.** `Customer.Balance` and
 `Supplier.Balance` are stored figures, maintained by hand wherever a document moves money, with no rebuild
 path — so a report that merely *added up the invoices* would be a second opinion, not a proof. These
 rebuild the position from the documents and subtract the stored balance. Zero means the cache and the
@@ -454,6 +551,14 @@ that reconciles to the balance, and revaluing an open payable would book an unre
 this system does not have anywhere (§45 D8). So the detail rows carry both figures: what the supplier will
 ask for (USD 1,000) and what it costs the shop (AED 3,670, at 3.67).
 
+**The cash position deliberately carries no `variance`, and the asymmetry is the point.** There is nothing
+for it to disagree with: an account has no stored balance (the money tables have no cache — see
+database-design.md), so this figure *is* the sum of the movements rather than a claim about them. A
+receivables report has to reconcile a hand-maintained decimal back to the invoices beneath it; a cash
+position only has to add up. It totals in the **base currency**, because a dirham till and a dollar bank
+account cannot be added otherwise, and the per-account rows carry both figures so the total can always be
+taken apart into money somebody can physically point at.
+
 ### Still planned
 
 Sketches, not contracts.
@@ -462,10 +567,10 @@ Sketches, not contracts.
 # Finance and reporting (P7, remaining)
 GET    /api/v1/reports/sales-summary    ?from=&to=&groupBy=product|salesperson|branch
 GET    /api/v1/reports/stock-valuation
-GET    /api/v1/reports/profit-and-loss  revenue − COGS − expenses (§45 D3 — computed, not a GL extract)
+GET    /api/v1/reports/profit-and-loss  revenue − COGS − expenses (§45 D3 — computed, not a GL extract).
+                                        The expenses half of it now exists: /finance/expenses/summary
+                                        already returns the figure this report subtracts.
 GET    /api/v1/reports/repair-profitability   P6 already computes the per-job margin; this aggregates it
-GET    /api/v1/expenses                 POST — including the unabsorbed import cost P4 recorded and the
-                                        warranty repairs P6 costed but never billed
 ```
 
 ## 7. Cross-cutting

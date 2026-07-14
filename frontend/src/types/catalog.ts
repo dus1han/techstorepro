@@ -151,6 +151,13 @@ export interface PaymentMethodDto {
   name: string;
   kind: number;
   requiresReference: boolean;
+  /**
+   * Where money tendered this way lands (P7). A payment through a method with no account behind it is
+   * refused — the alternative is money that arrived nowhere and is missed by nobody. It must be null for
+   * store credit, which moves no money.
+   */
+  financialAccountId: string | null;
+  financialAccountName: string | null;
   validFrom: string;
   validTo: string | null;
   isActive: boolean;

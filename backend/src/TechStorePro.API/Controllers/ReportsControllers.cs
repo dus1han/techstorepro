@@ -1,3 +1,4 @@
+using TechStorePro.Application.Finance.Queries;
 using TechStorePro.Application.Reports.Queries;
 using Microsoft.AspNetCore.Mvc;
 
@@ -40,4 +41,16 @@ public class ReportsController : ApiControllerBase
         [FromQuery] DateTimeOffset? from = null,
         [FromQuery] DateTimeOffset? to = null) =>
         Ok(await Mediator.Send(new GetSupplierStatementQuery(supplierId, from, to)));
+
+    /// <summary>
+    /// What the shop actually holds, across every till and bank account, totalled in base currency.
+    ///
+    /// It carries no variance, unlike the two ageing reports above — there is nothing to prove it against.
+    /// A customer's balance is a stored decimal that the receivables report has to reconcile back to the
+    /// invoices; an account has no stored balance at all, so this figure <em>is</em> the sum of the
+    /// movements rather than a claim about them.
+    /// </summary>
+    [HttpGet("cash-position")]
+    public async Task<ActionResult<CashPositionDto>> CashPosition([FromQuery] DateTimeOffset? asOf = null) =>
+        Ok(await Mediator.Send(new GetCashPositionQuery(asOf)));
 }

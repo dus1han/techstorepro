@@ -6,6 +6,7 @@ using TechStorePro.Domain.Auditing;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Common;
 using TechStorePro.Domain.Configuration;
+using TechStorePro.Domain.Finance;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Domain.Purchasing;
@@ -100,6 +101,14 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<RepairCharge> RepairCharges => Set<RepairCharge>();
     public DbSet<Warranty> Warranties => Set<Warranty>();
     public DbSet<WarrantyClaim> WarrantyClaims => Set<WarrantyClaim>();
+
+    // --- Finance (P7) --------------------------------------------------------------------------
+    //
+    // AccountTransactions is written by IAccountLedger and by nothing else. See IApplicationDbContext.
+    public DbSet<FinancialAccount> FinancialAccounts => Set<FinancialAccount>();
+    public DbSet<AccountTransaction> AccountTransactions => Set<AccountTransaction>();
+    public DbSet<ExpenseCategory> ExpenseCategories => Set<ExpenseCategory>();
+    public DbSet<Expense> Expenses => Set<Expense>();
 
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 

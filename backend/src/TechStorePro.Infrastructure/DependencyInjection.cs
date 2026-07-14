@@ -1,5 +1,6 @@
 using TechStorePro.Application.Catalog.Services;
 using TechStorePro.Application.Common.Interfaces;
+using TechStorePro.Application.Finance.Services;
 using TechStorePro.Application.Identity.Services;
 using TechStorePro.Application.Inventory.Barcodes;
 using TechStorePro.Application.Inventory.Services;
@@ -8,6 +9,7 @@ using TechStorePro.Application.Sales.Services;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Infrastructure.Catalog;
 using TechStorePro.Infrastructure.Configuration;
+using TechStorePro.Infrastructure.Finance;
 using TechStorePro.Infrastructure.Identity;
 using TechStorePro.Infrastructure.Inventory;
 using TechStorePro.Infrastructure.Persistence;
@@ -85,6 +87,11 @@ public static class DependencyInjection
         services.AddSingleton<ICostingStrategy, WeightedAverageCosting>();
         services.AddScoped<IStockLedger, StockLedger>();
         services.AddSingleton<ILabelRenderer, LabelRenderer>();
+
+        // The single door into account_transactions, exactly as IStockLedger is the single door into
+        // stock_movements. Money and stock are the two things this system cannot afford to get wrong, and
+        // both are guarded the same way: one implementation, an ambient transaction, a row lock.
+        services.AddScoped<IAccountLedger, AccountLedger>();
 
         // The cache must be able to prove itself. One implementation, shared by the /balance-audit
         // endpoint and the nightly job — a job with its own copy of the arithmetic could pass while

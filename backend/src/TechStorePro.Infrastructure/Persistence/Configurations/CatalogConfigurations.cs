@@ -283,9 +283,18 @@ public class PaymentMethodConfiguration : IEntityTypeConfiguration<PaymentMethod
         builder.Property(m => m.Kind).HasConversion<short>();
         builder.Property(m => m.DeletedReason).HasMaxLength(500);
 
+        builder.Ignore(m => m.MovesMoney);
+
         builder.HasIndex(m => new { m.CompanyId, m.Name })
             .IsUnique()
             .HasFilter("is_deleted = false");
+
+        // Where money tendered this way lands (P7). No navigation property: master data does not need to
+        // know what a finance module is, and the foreign key alone is what the database has to enforce.
+        builder.HasOne<Domain.Finance.FinancialAccount>()
+            .WithMany()
+            .HasForeignKey(m => m.FinancialAccountId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }
 

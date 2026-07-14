@@ -91,6 +91,14 @@ export const FEATURES = {
   // sensitive question the system can answer.
   receivables: "reports.receivables",
   payables: "reports.payables",
+
+  // P7 slice 2 — the money itself. Approve on accounts is not a manager signing a form: it is the right to
+  // move money between two accounts, which is the only act in the system that takes cash out of a drawer
+  // without any document to explain it. Delete on expenses is the right to cancel one — which pays the
+  // money back.
+  accounts: "finance.accounts",
+  expenses: "finance.expenses",
+  expenseCategories: "finance.expense_categories",
 } as const;
 
 export interface Permission {

@@ -1,10 +1,12 @@
 using TechStorePro.Application.Common.Exceptions;
 using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Application.Common.Security;
+using TechStorePro.Application.Finance.Services;
 using TechStorePro.Application.Sales.Common;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Exceptions;
+using TechStorePro.Domain.Finance;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Sales;
 using FluentValidation;
@@ -13,8 +15,19 @@ using Microsoft.EntityFrameworkCore;
 
 namespace TechStorePro.Application.Sales.Payments;
 
-/// <summary>One way the customer paid. Cash and card on the same sale are two of these.</summary>
-public record TenderLine(Guid PaymentMethodId, decimal Amount, string? Reference = null);
+/// <summary>
+/// One way the customer paid. Cash and card on the same sale are two of these.
+///
+/// <see cref="FinancialAccountId"/> says which drawer the notes went into (P7). It is optional and
+/// normally omitted — the payment method already knows, and the till screen does not want to ask. It
+/// exists for the shop with two branches and two cash drawers, where "Cash" is one method and the money
+/// is physically in one of two places: naming the account is the only way to say which.
+/// </summary>
+public record TenderLine(
+    Guid PaymentMethodId,
+    decimal Amount,
+    string? Reference = null,
+    Guid? FinancialAccountId = null);
 
 /// <summary>Which invoice this money settles, and how much of it.</summary>
 public record AllocationLine(Guid SalesInvoiceId, decimal Amount);
@@ -65,17 +78,20 @@ public class RecordPaymentCommandHandler : IRequestHandler<RecordPaymentCommand,
     private readonly IApplicationDbContext _db;
     private readonly ITenantContext _tenant;
     private readonly IDocumentNumberGenerator _numbers;
+    private readonly IAccountLedger _accounts;
     private readonly IDateTime _clock;
 
     public RecordPaymentCommandHandler(
         IApplicationDbContext db,
         ITenantContext tenant,
         IDocumentNumberGenerator numbers,
+        IAccountLedger accounts,
         IDateTime clock)
     {
         _db = db;
         _tenant = tenant;
         _numbers = numbers;
+        _accounts = accounts;
         _clock = clock;
     }
 
@@ -136,6 +152,15 @@ public class RecordPaymentCommandHandler : IRequestHandler<RecordPaymentCommand,
             if (method.Kind == PaymentMethodKind.StoreCredit)
             {
                 await RedeemStoreCreditAsync(payment, customer, tender.Amount, paidAt, cancellationToken);
+            }
+            else
+            {
+                // The money arrives somewhere (P7). Store credit deliberately does not come through here:
+                // no cash moves when a customer spends a voucher — the shop took that money when the goods
+                // came back, and it is in the drawer already. Writing an account transaction for it would
+                // add the same notes to the till twice, and the till would come up over by exactly the
+                // credit the shop had issued.
+                await BankAsync(payment, customer, method, tender, paidAt, cancellationToken);
             }
 
             // Through the DbSet, and only the DbSet. See ReceiveGoodsCommand: adding to the parent's
@@ -200,6 +225,45 @@ public class RecordPaymentCommandHandler : IRequestHandler<RecordPaymentCommand,
         customer.Balance -= payment.Amount;
 
         return payment.Id;
+    }
+
+    /// <summary>
+    /// The money, into the account that now holds it (P7, requirements §33).
+    ///
+    /// The account comes from the tender line if it named one — the shop with two tills — and otherwise
+    /// from the payment method, which is where a single-branch shop configures it once and forgets it.
+    ///
+    /// <b>If neither names an account the payment is refused, not silently banked nowhere.</b> That is the
+    /// whole point of the check: a payment that wrote no account transaction would still settle the
+    /// invoice and still reduce the customer's balance, so nothing downstream would look wrong — the money
+    /// would simply not be in the shop's cash position, and it would never be missed, because there is
+    /// nothing to miss it against.
+    /// </summary>
+    private async Task BankAsync(
+        CustomerPayment payment,
+        Domain.Catalog.Customer customer,
+        PaymentMethod method,
+        TenderLine tender,
+        DateTimeOffset paidAt,
+        CancellationToken cancellationToken)
+    {
+        var accountId = tender.FinancialAccountId ?? method.FinancialAccountId
+            ?? throw new DomainException(
+                $"'{method.Name}' has no cash or bank account behind it, so this money would arrive "
+                + "nowhere. Point the payment method at an account, or name one on the tender.");
+
+        await _accounts.PostAsync(
+            new AccountPosting(
+                accountId,
+                tender.Amount,   // positive: money in
+                AccountTransactionSource.CustomerPayment,
+                $"{customer.Name} — payment {payment.Number}",
+                BranchId: payment.BranchId,
+                SourceId: payment.Id,
+                SourceNumber: payment.Number,
+                Reference: tender.Reference ?? payment.Reference,
+                OccurredAt: paidAt),
+            cancellationToken);
     }
 
     /// <summary>

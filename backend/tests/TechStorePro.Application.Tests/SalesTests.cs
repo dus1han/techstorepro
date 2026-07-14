@@ -12,11 +12,13 @@ using TechStorePro.Application.Sales.Services;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Exceptions;
+using TechStorePro.Domain.Finance;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Domain.Sales;
 using TechStorePro.Infrastructure.Catalog;
 using TechStorePro.Infrastructure.Configuration;
+using TechStorePro.Infrastructure.Finance;
 using TechStorePro.Infrastructure.Inventory;
 using TechStorePro.Infrastructure.Persistence;
 using TechStorePro.Infrastructure.Sales;
@@ -57,6 +59,9 @@ public class SalesTests : IAsyncLifetime
     private Guid _cash;
     private Guid _card;          // requires a reference — a card slip that cannot be reconciled is useless
     private Guid _storeCredit;   // tender, not a discount: the shop has already had this money
+
+    private Guid _till;          // P7: where cash tendered at the counter actually lands
+    private Guid _bankAccount;
 
     public async Task InitializeAsync()
     {
@@ -138,11 +143,34 @@ public class SalesTests : IAsyncLifetime
 
         seed.Products.AddRange(laptop, cable);
 
+        // P7: money has to arrive somewhere. Every method that moves money names the account it lands in;
+        // store credit deliberately names none, because no money moves when a customer spends a voucher —
+        // the shop took that money when the goods came back.
+        var till = new FinancialAccount
+        {
+            CompanyId = company.Id,
+            Name = "Till",
+            Kind = FinancialAccountKind.Cash,
+            CurrencyCode = "AED",
+            BranchId = branch.Id
+        };
+
+        var bank = new FinancialAccount
+        {
+            CompanyId = company.Id,
+            Name = "Bank",
+            Kind = FinancialAccountKind.Bank,
+            CurrencyCode = "AED"
+        };
+
+        seed.FinancialAccounts.AddRange(till, bank);
+
         var cash = new PaymentMethod
         {
             CompanyId = company.Id,
             Name = "Cash",
             Kind = PaymentMethodKind.Cash,
+            FinancialAccountId = till.Id,
             ValidFrom = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
         };
 
@@ -152,6 +180,7 @@ public class SalesTests : IAsyncLifetime
             Name = "Card",
             Kind = PaymentMethodKind.Card,
             RequiresReference = true,
+            FinancialAccountId = bank.Id,
             ValidFrom = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
         };
 
@@ -200,6 +229,8 @@ public class SalesTests : IAsyncLifetime
         _cash = cash.Id;
         _card = card.Id;
         _storeCredit = storeCredit.Id;
+        _till = till.Id;
+        _bankAccount = bank.Id;
     }
 
     public Task DisposeAsync() => _postgres.DisposeAsync().AsTask();
@@ -1240,14 +1271,21 @@ public class SalesTests : IAsyncLifetime
         Guid invoiceId,
         RefundMethod refund,
         params ReturnLine[] lines) =>
-        await new IssueCreditNoteCommandHandler(db, Tenant(), Ledger(db), Numbers(db), new StubClock())
+        await new IssueCreditNoteCommandHandler(
+                db, Tenant(), Ledger(db), Accounts(db), Numbers(db), new StubClock())
             .Handle(
                 new IssueCreditNoteCommand(
                     SalesInvoiceId: invoiceId,
                     Lines: lines,
                     Refund: refund,
                     Reason: "Customer changed their mind",
-                    WarehouseId: _warehouseOfA),
+                    WarehouseId: _warehouseOfA,
+
+                    // Only a cash or bank refund hands money back, and only that needs an account to hand
+                    // it back out of. An offset moves no money and a store credit is a promise.
+                    RefundFromAccountId: refund is RefundMethod.CashRefund or RefundMethod.BankRefund
+                        ? _till
+                        : null),
                 CancellationToken.None);
 
     private async Task<Guid> PayAsync(
@@ -1255,7 +1293,7 @@ public class SalesTests : IAsyncLifetime
         Guid customerId,
         IReadOnlyCollection<TenderLine> methods,
         IReadOnlyCollection<AllocationLine>? allocations) =>
-        await new RecordPaymentCommandHandler(db, Tenant(), Numbers(db), new StubClock())
+        await new RecordPaymentCommandHandler(db, Tenant(), Numbers(db), Accounts(db), new StubClock())
             .Handle(
                 new RecordPaymentCommand(
                     CustomerId: customerId,
@@ -1271,7 +1309,8 @@ public class SalesTests : IAsyncLifetime
         IReadOnlyCollection<TenderLine> methods,
         bool mayApproveDiscounts = true) =>
         await new SellAtCounterCommandHandler(
-                db, Tenant(), Ledger(db), Pricer(db), Discounts(db, mayApproveDiscounts), Numbers(db), new StubClock())
+                db, Tenant(), Ledger(db), Accounts(db), Pricer(db), Discounts(db, mayApproveDiscounts),
+                Numbers(db), new StubClock())
             .Handle(
                 new SellAtCounterCommand(
                     CustomerId: customerId,
@@ -1393,6 +1432,10 @@ public class SalesTests : IAsyncLifetime
             new StubTenant(_companyA),
             new StubClock(),
             new WeightedAverageCosting());
+
+    /// <summary>The real account ledger, as P7 wires it — the door money goes through.</summary>
+    private AccountLedger Accounts(ApplicationDbContext db) =>
+        new(new ApplicationDbContextAccessor(db), db, new StubTenant(_companyA), new StubClock());
 
     private DocumentNumberGenerator Numbers(ApplicationDbContext db) =>
         new(new ApplicationDbContextAccessor(db), db, new StubTenant(_companyA), new StubClock());

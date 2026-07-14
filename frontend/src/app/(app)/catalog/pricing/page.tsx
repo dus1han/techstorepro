@@ -4,15 +4,31 @@ import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Can } from "@/components/auth/can";
 import { EntityForm, type FieldSpec } from "@/components/data/entity-form";
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import { useApiQuery } from "@/lib/use-api";
+import type { FinancialAccount } from "@/features/finance/types";
+import { PAYMENT_METHOD_KIND_LABELS, PaymentMethodKind } from "@/features/sales/types";
 import { FEATURES, PermissionAction } from "@/types/identity";
-import type { BrandDto, CategoryDto, DiscountDto, PriceTierDto, TaxRateDto } from "@/types/catalog";
+import type {
+  BrandDto,
+  CategoryDto,
+  DiscountDto,
+  PaymentMethodDto,
+  PriceTierDto,
+  TaxRateDto,
+} from "@/types/catalog";
 
-type Dialog = "category" | "brand" | "taxRate" | "tier" | "discount" | null;
+type Dialog = "category" | "brand" | "taxRate" | "tier" | "discount" | "paymentMethod" | null;
 
-const KEYS = [["categories"], ["brands"], ["tax-rates"], ["price-tiers"], ["discounts"]];
+const KEYS = [
+  ["categories"],
+  ["brands"],
+  ["tax-rates"],
+  ["price-tiers"],
+  ["discounts"],
+  ["payment-methods"],
+];
 
 /**
  * The rule tables behind pricing: categories, brands, tax rates, price tiers and discounts.
@@ -21,16 +37,31 @@ const KEYS = [["categories"], ["brands"], ["tax-rates"], ["price-tiers"], ["disc
  * is written from today, and yesterday's invoice still resolves yesterday's rate.
  */
 export default function PricingPage() {
-  const { accessToken } = useAuth();
+  const { accessToken, can } = useAuth();
   const client = useQueryClient();
 
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [editingMethod, setEditingMethod] = useState<PaymentMethodDto | null>(null);
 
   const categories = useApiQuery<CategoryDto[]>(["categories"], "api/v1/categories").data ?? [];
   const brands = useApiQuery<BrandDto[]>(["brands"], "api/v1/brands").data ?? [];
   const taxRates = useApiQuery<TaxRateDto[]>(["tax-rates"], "api/v1/tax-rates").data ?? [];
   const tiers = useApiQuery<PriceTierDto[]>(["price-tiers"], "api/v1/price-tiers").data ?? [];
   const discounts = useApiQuery<DiscountDto[]>(["discounts"], "api/v1/discounts").data ?? [];
+  const methods =
+    useApiQuery<PaymentMethodDto[]>(["payment-methods"], "api/v1/payment-methods").data ?? [];
+
+  /**
+   * The accounts a payment method can point at (P7).
+   *
+   * Gated on the permission rather than fetched blindly: the accounts endpoint answers to
+   * `finance.accounts`, and somebody who may edit payment methods but not see the shop's cash position
+   * would otherwise be shown a 403 for a picker they did not ask for.
+   */
+  const accounts =
+    useApiQuery<FinancialAccount[]>(["finance", "accounts"], "api/v1/finance/accounts", undefined, {
+      enabled: can(FEATURES.accounts, PermissionAction.View),
+    }).data ?? [];
 
   /**
    * Errors are deliberately NOT caught here: <EntityForm> catches the ApiError and binds its
@@ -42,6 +73,13 @@ export default function PricingPage() {
 
     setDialog(null);
     await Promise.all(KEYS.map((key) => client.invalidateQueries({ queryKey: key })));
+  }
+
+  async function reloadMethods() {
+    setDialog(null);
+    setEditingMethod(null);
+
+    await client.invalidateQueries({ queryKey: ["payment-methods"] });
   }
 
   return (
@@ -112,6 +150,42 @@ export default function PricingPage() {
               discount.maxValue !== null ? `Approval above ${discount.maxValue}` : "No approval ceiling",
             ].join(" · ")}
             badges={[discount.isInForce ? "in force" : "not in force"]}
+          />
+        ))}
+      </Section>
+
+      <Section
+        title="Payment methods"
+        feature={FEATURES.paymentMethods}
+        onAdd={() => setDialog("paymentMethod")}
+        empty={methods.length === 0}
+        emptyText="No payment methods. Nothing can be tendered until one exists."
+      >
+        {methods.map((method) => (
+          <Row
+            key={method.id}
+            title={`${method.name} — ${PAYMENT_METHOD_KIND_LABELS[method.kind as PaymentMethodKind]}`}
+            subtitle={[
+              // The account is the line worth reading. A method that moves money and names no account is
+              // refused at the till — and the shop only finds out with a customer standing in front of it.
+              method.kind === PaymentMethodKind.StoreCredit
+                ? "No account — store credit is a voucher, not money"
+                : (method.financialAccountName ?? "No account — payments through it will be refused"),
+              method.requiresReference ? "Reference required" : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            badges={[method.isInForce ? "in force" : "not in force"]}
+            action={
+              <Can feature={FEATURES.paymentMethods} action={PermissionAction.Edit}>
+                <button
+                  onClick={() => setEditingMethod(method)}
+                  className="rounded-md border border-slate-200 px-2.5 py-1 text-xs hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+                >
+                  Edit
+                </button>
+              </Can>
+            }
           />
         ))}
       </Section>
@@ -217,9 +291,198 @@ export default function PricingPage() {
           onSubmit={(v) => post("api/v1/brands", v)}
         />
       )}
+
+      {(dialog === "paymentMethod" || editingMethod) && (
+        <PaymentMethodDialog
+          method={editingMethod}
+          accounts={accounts}
+          token={accessToken!}
+          onClose={() => {
+            setDialog(null);
+            setEditingMethod(null);
+          }}
+          onSaved={reloadMethods}
+        />
+      )}
     </div>
   );
 }
+
+/**
+ * A way for money to arrive, and where it lands when it does (§23, and P7's account behind it).
+ *
+ * Hand-rolled rather than an `<EntityForm>` because of one rule the picker has to obey as the kind is
+ * chosen: <b>store credit must have no account.</b> It is a voucher the shop already owes the customer,
+ * not money moving — pointing it at the till would mean the drawer filled up every time somebody spent a
+ * credit note, and the cash position would report notes that nobody had handed over. Every other kind wants
+ * an account, and a payment through one that has none is refused at the till.
+ */
+function PaymentMethodDialog({
+  method,
+  accounts,
+  token,
+  onClose,
+  onSaved,
+}: {
+  method: PaymentMethodDto | null;
+  accounts: FinancialAccount[];
+  token: string;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [name, setName] = useState(method?.name ?? "");
+  const [kind, setKind] = useState<PaymentMethodKind>(
+    (method?.kind as PaymentMethodKind) ?? PaymentMethodKind.Cash,
+  );
+  const [requiresReference, setRequiresReference] = useState(method?.requiresReference ?? false);
+  const [financialAccountId, setFinancialAccountId] = useState(method?.financialAccountId ?? "");
+  const [isActive, setIsActive] = useState(method?.isActive ?? true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const storeCredit = kind === PaymentMethodKind.StoreCredit;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+      <form
+        onSubmit={async (event) => {
+          event.preventDefault();
+
+          setBusy(true);
+          setError(null);
+
+          // Not merely hidden when the kind is store credit — cleared. A method switched to store credit
+          // while an account was picked would otherwise carry the account with it, invisibly.
+          const accountId = storeCredit ? null : financialAccountId || null;
+
+          try {
+            if (method) {
+              await api.put(`api/v1/payment-methods/${method.id}`, {
+                token,
+                body: {
+                  id: method.id,
+                  name,
+                  kind,
+                  requiresReference,
+                  validTo: method.validTo,
+                  isActive,
+                  financialAccountId: accountId,
+                },
+              });
+            } else {
+              await api.post("api/v1/payment-methods", {
+                token,
+                body: { name, kind, requiresReference, validFrom: null, financialAccountId: accountId },
+              });
+            }
+
+            await onSaved();
+          } catch (e) {
+            setError(e instanceof ApiError ? e.message : "The payment method was not saved.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+        className="w-full max-w-lg space-y-5 rounded-lg border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-950"
+      >
+        <h2 className="text-lg font-semibold">{method ? `Edit ${method.name}` : "New payment method"}</h2>
+
+        {error && (
+          <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+            {error}
+          </p>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block space-y-1">
+            <span className="text-sm font-medium">Name</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} className={INPUT} />
+          </label>
+
+          <label className="block space-y-1">
+            <span className="text-sm font-medium">Kind</span>
+            <select
+              value={String(kind)}
+              onChange={(e) => setKind(Number(e.target.value) as PaymentMethodKind)}
+              className={INPUT}
+            >
+              {Object.entries(PAYMENT_METHOD_KIND_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block space-y-1 sm:col-span-2">
+            <span className="text-sm font-medium">Money tendered this way lands in</span>
+            <select
+              value={storeCredit ? "" : financialAccountId}
+              disabled={storeCredit}
+              onChange={(e) => setFinancialAccountId(e.target.value)}
+              className={`${INPUT} disabled:opacity-50`}
+            >
+              <option value="">—</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.name} ({account.currencyCode})
+                </option>
+              ))}
+            </select>
+
+            <span className="block text-xs text-slate-500">
+              {storeCredit
+                ? "Store credit moves no money — it is a voucher the shop already owes. It takes no account, and the server refuses one."
+                : "Without an account, a payment through this method is refused: the money would arrive nowhere and be missed by nobody."}
+            </span>
+          </label>
+
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={requiresReference}
+              onChange={(e) => setRequiresReference(e.target.checked)}
+              className="size-4 accent-slate-900 dark:accent-slate-100"
+            />
+            Reference required
+          </label>
+
+          {method && (
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={isActive}
+                onChange={(e) => setIsActive(e.target.checked)}
+                className="size-4 accent-slate-900 dark:accent-slate-100"
+              />
+              In use
+            </label>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-slate-200 px-3 py-1.5 text-sm hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy || !name.trim()}
+            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900"
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+const INPUT =
+  "w-full rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm outline-none focus:border-slate-900 dark:border-slate-700 dark:focus:border-slate-300";
 
 const discountFields: FieldSpec[] = [
   { name: "name", label: "Name", required: true },
@@ -283,10 +546,12 @@ function Row({
   title,
   subtitle,
   badges = [],
+  action,
 }: {
   title: string;
   subtitle: string;
   badges?: (string | null)[];
+  action?: ReactNode;
 }) {
   return (
     <div className="flex items-center justify-between gap-4 p-4">
@@ -295,7 +560,7 @@ function Row({
         <p className="truncate text-xs text-slate-500">{subtitle}</p>
       </div>
 
-      <div className="flex shrink-0 gap-1.5">
+      <div className="flex shrink-0 items-center gap-1.5">
         {badges.filter(Boolean).map((badge) => (
           <span
             key={badge}
@@ -308,6 +573,8 @@ function Row({
             {badge}
           </span>
         ))}
+
+        {action}
       </div>
     </div>
   );

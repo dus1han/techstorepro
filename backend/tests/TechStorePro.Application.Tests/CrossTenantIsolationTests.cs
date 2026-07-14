@@ -1,5 +1,6 @@
 using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Domain.Catalog;
+using TechStorePro.Domain.Finance;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Domain.Sales;
@@ -751,6 +752,77 @@ public class CrossTenantIsolationTests : IAsyncLifetime
 
         (await asB.CustomerPayments.FirstOrDefaultAsync(p => p.Id == payment.Id)).Should().BeNull();
         (await asB.CreditNotes.FirstOrDefaultAsync(c => c.Id == creditNote.Id)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task What_a_company_holds_and_what_it_spends_are_isolated_per_company_too()
+    {
+        // P7 slice 2 added the four tables that say how much money a shop actually has and where it goes.
+        // These are the most commercially sensitive rows in the system — a leak here would tell a
+        // competitor what is in the till, what the rent is, and what the shop is worth this morning.
+        await using var asA = CreateContext(_companyA);
+
+        var till = new FinancialAccount
+        {
+            CompanyId = _companyA,
+            Name = "A's till",
+            Kind = FinancialAccountKind.Cash,
+            CurrencyCode = "AED",
+            BranchId = _branchOfA
+        };
+
+        var category = new ExpenseCategory { CompanyId = _companyA, Name = "Rent" };
+
+        asA.FinancialAccounts.Add(till);
+        asA.ExpenseCategories.Add(category);
+        await asA.SaveChangesAsync();
+
+        asA.AccountTransactions.Add(new AccountTransaction
+        {
+            CompanyId = _companyA,
+            FinancialAccountId = till.Id,
+            BranchId = _branchOfA,
+            Source = AccountTransactionSource.OpeningBalance,
+            Amount = 5_000m,
+            OccurredAt = DateTimeOffset.UnixEpoch,
+            Description = "Opening balance"
+        });
+
+        asA.Expenses.Add(new Expense
+        {
+            CompanyId = _companyA,
+            Number = "EXP-2026-00001",
+            ExpenseCategoryId = category.Id,
+            BranchId = _branchOfA,
+            FinancialAccountId = till.Id,
+            Description = "July rent",
+            Amount = 12_000m,
+            CurrencyCode = "AED",
+            ExpenseDate = DateTimeOffset.UnixEpoch
+        });
+
+        await asA.SaveChangesAsync();
+
+        await using var asB = CreateContext(_companyB);
+
+        (await asB.FinancialAccounts.CountAsync()).Should().Be(0);
+        (await asB.ExpenseCategories.CountAsync()).Should().Be(0);
+        (await asB.Expenses.CountAsync()).Should().Be(0);
+
+        (await asB.AccountTransactions.CountAsync())
+            .Should().Be(0, "what is in another shop's till is not a number this company may see");
+
+        // Not even holding the exact id.
+        (await asB.FinancialAccounts.FirstOrDefaultAsync(a => a.Id == till.Id)).Should().BeNull();
+
+        // And the balance B computes over its own (empty) ledger is zero, not A's 5,000 — which is the
+        // failure that would actually reach a screen, because the cash position is a SUM and a leaking
+        // query filter would quietly add another company's money to this one's.
+        var balanceForB = await asB.AccountTransactions
+            .Where(t => t.FinancialAccountId == till.Id)
+            .SumAsync(t => (decimal?)t.Amount) ?? 0m;
+
+        balanceForB.Should().Be(0m);
     }
 
     [Fact]

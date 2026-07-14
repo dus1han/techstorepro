@@ -84,6 +84,26 @@ public class PaymentMethod : TenantEntity
     /// </summary>
     public bool RequiresReference { get; set; }
 
+    /// <summary>
+    /// Where money tendered this way lands (P7): "Cash" goes into the till, "Bank transfer" into the bank
+    /// account. Without it, a payment would be money that arrived nowhere, and the shop's cash position
+    /// would be short by every sale it ever took.
+    ///
+    /// <b>Nullable, and null means two entirely different things depending on the kind.</b> For
+    /// <see cref="PaymentMethodKind.StoreCredit"/> it is <em>correct</em> and required to be null: no money
+    /// moves when a customer spends credit they already hold — the shop had that money when the goods came
+    /// back, and it is sitting in the till already. An account transaction there would invent cash that is
+    /// not in the drawer. For every other kind, null means the method is <em>not yet configured</em>, and a
+    /// payment tendered through it is refused rather than silently losing the money (see
+    /// <c>RecordPaymentCommand</c>). It is nullable rather than required because the column had to land on
+    /// a table that already had rows in it, and a shop's own tender that no account can hold is a
+    /// contradiction the shop has to resolve, not one a migration can guess at.
+    /// </summary>
+    public Guid? FinancialAccountId { get; set; }
+
+    /// <summary>True when money actually moves — everything except store credit.</summary>
+    public bool MovesMoney => Kind != PaymentMethodKind.StoreCredit;
+
     public DateTimeOffset ValidFrom { get; set; }
     public DateTimeOffset? ValidTo { get; set; }
 
@@ -91,4 +111,17 @@ public class PaymentMethod : TenantEntity
 
     public bool IsInForceAt(DateTimeOffset at) =>
         IsActive && ValidFrom <= at && (ValidTo is null || ValidTo > at);
+
+    public void Validate()
+    {
+        if (!MovesMoney && FinancialAccountId is not null)
+        {
+            // Store credit is money the shop already has. Pointing it at a cash account would add the
+            // amount to the drawer a second time, every time a customer spent a voucher — and the till
+            // would come up over by exactly the credit the shop had issued.
+            throw new DomainException(
+                "Store credit is not money moving: the shop already holds it. It cannot pay into an "
+                + "account.");
+        }
+    }
 }

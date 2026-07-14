@@ -85,6 +85,9 @@ public static class FeatureCatalog
     // --- P7: finance and reporting ---
     public const string Receivables = "reports.receivables";
     public const string Payables = "reports.payables";
+    public const string Accounts = "finance.accounts";
+    public const string Expenses = "finance.expenses";
+    public const string ExpenseCategories = "finance.expense_categories";
 
     private static readonly PermissionAction[] ReadOnly = [PermissionAction.View, PermissionAction.Export];
 
@@ -217,7 +220,27 @@ public static class FeatureCatalog
         // about all the same, because "what is every customer's debt, and how old is it" is the most
         // commercially sensitive question the system can answer, and the shop floor does not need to ask it.
         new() { Code = Receivables, Module = "Reports", Name = "Receivables & statements", DisplayOrder = 610, SupportedActions = ReadOnly },
-        new() { Code = Payables, Module = "Reports", Name = "Payables & statements", DisplayOrder = 620, SupportedActions = ReadOnly }
+        new() { Code = Payables, Module = "Reports", Name = "Payables & statements", DisplayOrder = 620, SupportedActions = ReadOnly },
+
+        // Finance. Cash and bank accounts (§33) and what the shop spends (§34).
+        //
+        // Where Create sits here is the whole control, and it is worth being explicit about why, because
+        // it is not obvious from the names.
+        //
+        // An account cannot be Created or Edited into holding money: there is no balance field to type a
+        // number into (see FinancialAccount), and the only way a figure changes is a movement written by
+        // IAccountLedger against a document. So the dangerous grant on accounts is not Create — it is the
+        // transfer, which moves real money between two of them, and that is what Approve guards.
+        new() { Code = Accounts, Module = "Finance", Name = "Cash & bank accounts", DisplayOrder = 630, SupportedActions = ManageAndApprove },
+
+        // Expenses are the one write in the whole system that takes money out of the bank with no
+        // counterparty document to check it against — no supplier invoice, no goods, no customer. Nothing
+        // downstream can catch a wrong one, so Create *is* the control, exactly as it is for a stock
+        // adjustment: there is no approval step to hide behind, and a shop should grant it to the people
+        // who would sign the cheque.
+        new() { Code = Expenses, Module = "Finance", Name = "Expenses", DisplayOrder = 640, SupportedActions = Manage },
+
+        new() { Code = ExpenseCategories, Module = "Finance", Name = "Expense categories", DisplayOrder = 650, SupportedActions = Manage }
     ];
 
     public static bool Exists(string code) => All.Any(f => f.Code == code);

@@ -1,8 +1,10 @@
 using TechStorePro.Application.Common.Exceptions;
 using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Application.Common.Security;
+using TechStorePro.Application.Finance.Services;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Exceptions;
+using TechStorePro.Domain.Finance;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Purchasing;
 using FluentValidation;
@@ -41,6 +43,12 @@ public record PaySupplierCommand(
     decimal ExchangeRate = 1m,
     DateTimeOffset? PaidAt = null,
     string? Reference = null,
+
+    /// <summary>
+    /// The account the money leaves (P7). Optional: the payment method already knows which bank account it
+    /// draws on, and this overrides it for the shop that keeps more than one.
+    /// </summary>
+    Guid? FinancialAccountId = null,
     string? Notes = null) : IRequest<Guid>;
 
 public class PaySupplierCommandValidator : AbstractValidator<PaySupplierCommand>
@@ -65,15 +73,21 @@ public class PaySupplierCommandValidator : AbstractValidator<PaySupplierCommand>
 public class PaySupplierCommandHandler : IRequestHandler<PaySupplierCommand, Guid>
 {
     private readonly IApplicationDbContext _db;
+    private readonly ITenantContext _tenant;
+    private readonly IAccountLedger _accounts;
     private readonly IDocumentNumberGenerator _numbers;
     private readonly IDateTime _clock;
 
     public PaySupplierCommandHandler(
         IApplicationDbContext db,
+        ITenantContext tenant,
+        IAccountLedger accounts,
         IDocumentNumberGenerator numbers,
         IDateTime clock)
     {
         _db = db;
+        _tenant = tenant;
+        _accounts = accounts;
         _numbers = numbers;
         _clock = clock;
     }
@@ -211,9 +225,90 @@ public class PaySupplierCommandHandler : IRequestHandler<PaySupplierCommand, Gui
 
         supplier.Balance -= settledDebtBase + unallocatedBase;
 
+        await DebitAsync(payment, supplier, method, request.FinancialAccountId, cancellationToken);
+
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         return payment.Id;
+    }
+
+    /// <summary>
+    /// The money, out of the account that held it (P7, requirements §33).
+    ///
+    /// <b>What leaves the bank is what was paid — never what the invoice was booked at.</b> This is the
+    /// same 70 dirhams as the balance arithmetic above, seen from the other side, and it is the one number
+    /// in this handler that a reasonable person gets wrong.
+    ///
+    /// A USD 1,000 invoice booked at 3.67 is a debt of AED 3,670, and AED 3,670 is what comes off the
+    /// supplier's balance. But the bank hands over AED 3,600, because that is the rate on the day — so
+    /// <b>AED 3,600</b> is what this account transaction records. The AED 70 is a realised gain: it is
+    /// P&amp;L, and it is not money. It never entered or left any account, and nobody can point at it.
+    ///
+    /// Debit the account by the booked 3,670 instead — the number that is right there in
+    /// <c>settledDebtBase</c>, and which balances so neatly against the supplier — and the shop's bank
+    /// account in this system would disagree with the shop's actual bank by 70 dirhams. Forever. On every
+    /// foreign bill it ever paid. And the discrepancy would grow, and nothing in the system could explain
+    /// it, because both figures would be individually correct.
+    /// </summary>
+    private async Task DebitAsync(
+        SupplierPayment payment,
+        Domain.Catalog.Supplier supplier,
+        Domain.Catalog.PaymentMethod method,
+        Guid? requestedAccountId,
+        CancellationToken cancellationToken)
+    {
+        var accountId = requestedAccountId ?? method.FinancialAccountId
+            ?? throw new DomainException(
+                $"'{method.Name}' has no cash or bank account behind it, so this money would leave from "
+                + "nowhere. Point the payment method at an account, or name one on the payment.");
+
+        var account = await _db.FinancialAccounts
+            .FirstOrDefaultAsync(a => a.Id == accountId, cancellationToken)
+            ?? throw new NotFoundException("Account", accountId);
+
+        var baseCurrency = await _db.Companies
+            .Where(c => c.Id == _tenant.CompanyId)
+            .Select(c => c.BaseCurrency)
+            .FirstAsync(cancellationToken);
+
+        // What actually left, in the account's own money — the only figure the account can be reconciled
+        // against.
+        decimal leftTheAccount;
+
+        if (account.CurrencyCode == payment.CurrencyCode)
+        {
+            // A dollar bill paid from a dollar account: a thousand dollars left, and no rate is involved.
+            leftTheAccount = payment.Amount;
+        }
+        else if (account.CurrencyCode == baseCurrency)
+        {
+            // A dollar bill paid from the dirham account — the ordinary case. The bank converted, and what
+            // left is the payment-day value. AmountBase is Amount × the PAYMENT's rate, which is exactly
+            // the point.
+            leftTheAccount = payment.AmountBase;
+        }
+        else
+        {
+            // A dollar bill paid out of a euro account. It would need a second rate that nobody has given
+            // us, and inventing one would put a number on the euro account that the euro bank never saw.
+            throw new DomainException(
+                $"This payment is in {payment.CurrencyCode} and '{account.Name}' holds "
+                + $"{account.CurrencyCode}. Pay it from an account in {payment.CurrencyCode} or in "
+                + $"{baseCurrency}.");
+        }
+
+        await _accounts.PostAsync(
+            new AccountPosting(
+                account.Id,
+                -leftTheAccount,   // negative: money out
+                AccountTransactionSource.SupplierPayment,
+                $"{supplier.Name} — payment {payment.Number}",
+                BranchId: payment.BranchId,
+                SourceId: payment.Id,
+                SourceNumber: payment.Number,
+                Reference: payment.Reference,
+                OccurredAt: payment.PaidAt),
+            cancellationToken);
     }
 }

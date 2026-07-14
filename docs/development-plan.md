@@ -24,6 +24,12 @@
 > fully-credited invoice shows as unpaid for ever** — which the reports work around and the debt register
 > now names.
 >
+> **Its second slice answers the other half of the question.** Slice 1 said what the shop is *owed* and what
+> it *owes*; slice 2 says what it actually **holds**. Cash and bank accounts, an account ledger, and
+> expenses — and with them the discovery that the system had been taking money for two phases without ever
+> recording where it went. A sale at the till reduced the customer's balance and put nothing in any drawer,
+> because there was no drawer.
+>
 > Phases are numbered P0–P9 and match [architecture.md §6](architecture.md). The earlier M0–M8
 > milestone numbering is gone: it mapped almost one-to-one, and keeping two schemes alive only
 > invited someone to cite the wrong one. Where this file and architecture.md disagree, architecture.md
@@ -486,10 +492,90 @@ rather than by name, because this is a screen somebody opens to decide who to te
 statement drawer behind each row opens the account: opening balance, every movement, closing balance, and
 the running column their finance person will actually read.
 
+#### Slice 2 — cash and bank accounts, expenses ✅ done
+
+**Slice 1 said what the shop is owed and what it owes. This says what it actually holds** (§33, §34).
+
+**Four new tables (79 → 83):** `financial_accounts`, `account_transactions`, `expense_categories`,
+`expenses`. Plus one nullable column on `payment_methods` — and that column is the whole point, because
+**the system had been taking money for two phases and recording nowhere that it went**. A sale at the till
+reduced the customer's balance and put nothing in any drawer. Nothing looked wrong: the invoice settled, the
+stock left, the customer's account was right. The money simply was not anywhere, and nobody could have
+noticed, because there was nothing for it to be missing *from*.
+
+- **`IAccountLedger` is the single door into `account_transactions`**, exactly as `IStockLedger` is the
+  single door into `stock_movements` (architecture.md §4.5 — the rule now covers money as well as goods).
+  Every method **requires an ambient transaction and throws without one**, and the account row is locked
+  (`SELECT … FOR UPDATE`) before its balance is summed. That lock is the cash equivalent of "prevent
+  overselling", and it fails the same way without it: two clerks paying out the last 500 in the drawer both
+  read 500, both succeed, and the till owes money it does not have.
+- **An account has no balance column, and that is the design.** The balance is the SUM of its movements.
+  Stock is cached and this is not, and the difference is not an inconsistency: a stock balance carries the
+  weighted average, which is genuinely derived state that must be recomputed under a lock as each movement
+  lands. A cash balance is a plain sum, and Postgres can add up a column. **So the cash position reports no
+  variance** — unlike slice 1's ageing reports, which spend their whole budget proving a hand-maintained
+  cache still agrees with the documents beneath it. There is nothing here for it to disagree with.
+- **Expenses** (§34) are recorded and paid in one act — no draft, no accrual, because there is no general
+  ledger to accrue into (D3). A mistake is **cancelled, never edited**: the reversal is a movement of its
+  own and both rows stay on the statement, because editing the amount of a paid expense would silently
+  restate a bank balance that has already been reconciled.
+- **Transfers** write two movements, never one — the same reasoning as a stock transfer.
+
+**The arithmetic that had to be got right, and the two places it was nearly got wrong:**
+
+1. **The bank is debited by what left the bank — never by what the invoice was booked at.** This is P4's FX
+   gain seen from the other side, and it is the one number here a reasonable person gets wrong. A USD 1,000
+   invoice booked at 3.67 is a debt of AED 3,670, and AED 3,670 is what comes off the supplier's balance —
+   that is P4, and it is what makes the supplier reach exactly zero. But the bank hands over **AED 3,600**,
+   because that is the rate on the day. The AED 70 is a realised gain: it is P&L, and **it is not money** —
+   nobody can point at it, and it never entered or left any account. Debit the account by the booked 3,670 —
+   the figure that balances so neatly against the supplier, and which is sitting right there in the handler —
+   and the shop's bank account in this system would disagree with the shop's actual bank by 70 dirhams. For
+   ever. On every foreign bill it ever paid. And the discrepancy would grow, and nothing could explain it,
+   because both figures would be individually correct.
+2. **Store credit banks nothing.** A customer tendering a 1,000 voucher hands over no money — the shop took
+   that money when the goods came back, and it is in the drawer already. A tender line that wrote a cash
+   movement would put the same notes in the till twice, and the drawer would come up **over** by exactly the
+   credit the shop had issued. So `PaymentMethod.FinancialAccountId` must be null for store credit, and is
+   refused on the entity. For every other kind, null means *unconfigured*, and a payment through it is
+   **refused rather than silently banked nowhere** — which is the trap the whole slice exists to close.
+
+**Tests: 368 → 389.** Twenty new, against a real Postgres, plus the cross-tenant gate over all four new
+tables — what is in another shop's till is the most commercially sensitive number in the system. Proven: a
+till cannot pay out what it does not hold, *including twice inside one transaction* (a ledger with no cached
+balance has to count its own pending work, or a drawer holding 500 pays out 500 twice in one commit); a cash
+account cannot be given an overdraft and a bank account can; a transfer creates no money and destroys none; a
+cancelled expense is not counted against the shop; and the foreign bill above, where the supplier lands at
+zero and the bank loses 3,600.
+
+**Verified end to end against a live API** — 24 checks, all green. A shop was onboarded and a laptop sold
+through the till: the money was **in the till**. The laptop came back for store credit and the till did not
+move; the voucher was then spent and the till still did not move. July's rent left the bank, a
+double-booked courier fee was cancelled and came back, and both rows stayed on the statement. The till was
+banked, and a second attempt to bank more than it held was refused. A USD 1,000 bill booked at 3.67 was paid
+at 3.60: the supplier landed at **zero**, the bank lost **3,600**, and the payables variance was still zero.
+The cash position totalled its own rows exactly — and the P3 balance audit still reconciled, which is what
+proves nothing in finance wrote stock behind the ledger's back.
+
+**The screens.** `features/finance/{types, api, components}` — the shape P5 set, copied as P6 and P7 have.
+Two: **cash & bank accounts** (the cash position as the headline figure, because that is the number the owner
+opens the screen for; a statement drawer behind each row) and **expenses** (cancelled ones struck through
+rather than hidden — the point of cancelling is that the mistake stays visible next to its reversal). Payment
+methods got their first screen at all, because they now have an account to be pointed at.
+
+**A P5 bug fell out of building this.** The till fetched payment methods and tax rates as a `PagedResult` and
+read `.items` off them — but both endpoints return a bare array, so both lists came back empty. **The POS
+screen has never been able to take a payment**, and no test caught it because the tests drive the handlers,
+not the screen. Fixed.
+
 #### Still to build
 
-Cash and bank accounts, expenses (§34), the §35 report set including the computed P&L, the §36 dashboard,
-§37 global search.
+The §35 report set including the computed P&L, the §36 dashboard, §37 global search.
+
+**The P&L now has its expenses half.** What it must not do is double-count: `import_shipments.unabsorbed_cost`
+and the cost of an absorbed warranty repair are **computed** expenses that no one types in, and a shop that
+also books a customs broker's fee under an "Import costs" category would otherwise be charged twice for the
+same container.
 
 **A modelling gap this slice found and did not close.** A credit note does not write an allocation against
 the invoice it credits, so the invoice can never reach `Paid` and its status is a lie the moment it is
@@ -535,7 +621,7 @@ Recorded rather than hidden. Each has an owning phase; none is a reason to stop.
 | No rate limiting on `/auth/*` | Lockout blunts online brute force but not a distributed one. | **P9** |
 | Migrations applied by the API at start-up (Development) | Fine for one developer; two production instances starting together would race. | Before the first real deploy: a separate deploy step. |
 | Postgres RLS not enabled | The EF query filter is enforced centrally and proven by tests. RLS would stop even a raw SQL query that bypassed it. | Before production (database-design.md §1). |
-| **Frontend types still hand-written** | `types/*.ts` mirror the API by hand. A renamed API field compiles fine on the client and fails at runtime. **P3 added the `codegen` script** that generates them from `/openapi/v1.json`; the hand-written types are still what the app imports, so the drift is now *checkable* but not yet *impossible*. Rolled from P4 (which built no screens), then from P5, and **P6 added a third hand-written module to the pile**. Every phase that ships screens without closing it makes it more expensive to close. | **P7**, and it should stop being deferred — it is the oldest live debt in the project. |
+| **Frontend types still hand-written** | `types/*.ts` mirror the API by hand. A renamed API field compiles fine on the client and fails at runtime. **P3 added the `codegen` script** that generates them from `/openapi/v1.json`; the hand-written types are still what the app imports, so the drift is now *checkable* but not yet *impossible*. Rolled from P4 (which built no screens), then from P5, then P6, and now P7 slice 2 — **a fourth hand-written module**. And it has now cost real money: the till fetched payment methods as a `PagedResult` when the endpoint returns a bare array, so **the POS could never take a payment**, and it compiled and shipped. That is precisely the failure this debt describes, and it is no longer hypothetical. | **P7**, and it should stop being deferred — it is the oldest live debt in the project and it has now caused its first outage-class bug. |
 | **Repair photos not built** (§28) | A technician cannot attach the picture of the cracked screen the customer will later dispute — the one piece of evidence the intake notes exist to replace. This is a *scoped omission*, not an oversight: photos are attachments, and **where attachments live is Q9**, which is open. Building a storage layer to hold them would be answering Q9 by accident. | **Q9, then P9.** The rest of P6 does not depend on it. |
 | **A credit note writes no allocation against the invoice it credits** | Found by P7 slice 1. Issuing one moves `Customer.Balance` but leaves the invoice at its full `OutstandingAmount` and `Posted` — so **a fully-credited invoice shows on the sales-invoice screen as unpaid and overdue, for ever**, and its status can never reach `Paid`. The receivables report nets credit notes per invoice and therefore reconciles, but the fix lives in the *report*, not in the model, so every other reader of the invoice still sees the wrong number. Closing it means a credit note allocating against the invoice the way a payment does — a change to proven P5 code plus a migration, and a decision worth taking on its own rather than smuggling into a reporting slice. | **P7**, before the dashboard reads invoice status. |
 | ~~**P4 and P5 have no screens**~~ | **Closed.** Sales landed its seven screens in P5 slice 4; purchasing now has its five — goods receipts, orders, supplier invoices, supplier payments, imports and landed cost. Closing it surfaced the larger problem: P4 had no *endpoints* for half of what it claimed either (see P4 above). | ✅ |
@@ -595,14 +681,14 @@ service logs a warning at start-up saying exactly what stops happening if you do
 
 ## Immediate next steps
 
-1. **P7 — finance, reporting, dashboard.** Nothing blocks it, and three of its inputs are already computed
-   and waiting to be aggregated: P6's per-job margin (the §35 repair-profitability report is a `GROUP BY`
-   over numbers that already exist), P4's `import_shipments.unabsorbed_cost`, and the cost of every
-   warranty repair the shop has absorbed but never billed. All three are **expenses P7 owns**.
-2. **Migrate the frontend onto generated types.** The `codegen` script has existed since P3 and nothing
-   imports it. `features/{purchasing,sales,repairs}/types.ts` all mirror the API by hand, and a renamed
-   field would compile clean and fail at runtime. **This is now the oldest live debt, and it grew again in
-   P6** — every phase that ships screens without closing it makes it more expensive to close.
+1. **Migrate the frontend onto generated types — first, now, before another screen ships.** This has been
+   deferred since P3 and it has just cost the product its POS: the till typed a bare-array endpoint as a
+   `PagedResult`, compiled clean, and could never take a payment. **The debt stopped being theoretical.**
+   `features/{purchasing,sales,repairs,finance}/types.ts` all still mirror the API by hand.
+2. **P7 slice 3 — the §35 report set and the computed P&L.** Its inputs are now all present: revenue and
+   COGS from P5, P6's per-job margin (a `GROUP BY` over numbers that already exist), and expenses from
+   slice 2. Watch the double-count named above: `import_shipments.unabsorbed_cost` and absorbed warranty
+   cost are computed expenses nobody types in.
 3. **Decide what a zero credit limit means.** `Customer.WouldExceedCreditLimit` treats zero as
    *unlimited*, while the entity's own comment says zero means "cash only". Nothing exercised it until
    P5. It is a one-line change either way, but it is a business decision, not a technical one.

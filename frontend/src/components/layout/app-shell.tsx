@@ -70,9 +70,16 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: "Finance",
     items: [
-      // Receivables first: money owed to the shop is chased daily, money the shop owes is paid on terms.
+      // The cash position first: "how much money is there" is the one question an owner opens the system
+      // for, and it is the only screen here that answers it without a caveat.
+      { href: "/finance/accounts", label: "Cash & bank", feature: FEATURES.accounts },
+      { href: "/finance/expenses", label: "Expenses", feature: FEATURES.expenses },
+
+      // Receivables before payables: money owed to the shop is chased daily, money the shop owes is paid
+      // on terms.
       { href: "/reports/receivables", label: "Receivables", feature: FEATURES.receivables },
       { href: "/reports/payables", label: "Payables", feature: FEATURES.payables },
+      { href: "/finance/expense-categories", label: "Expense categories", feature: FEATURES.expenseCategories },
     ],
   },
   {

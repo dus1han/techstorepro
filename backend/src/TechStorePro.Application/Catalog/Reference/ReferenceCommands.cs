@@ -830,6 +830,8 @@ public record PaymentMethodDto(
     string Name,
     PaymentMethodKind Kind,
     bool RequiresReference,
+    Guid? FinancialAccountId,
+    string? FinancialAccountName,
     DateTimeOffset ValidFrom,
     DateTimeOffset? ValidTo,
     bool IsActive,
@@ -856,21 +858,50 @@ public class GetPaymentMethodsQueryHandler
     {
         var now = _clock.UtcNow;
 
-        var methods = await _db.PaymentMethods.AsNoTracking().OrderBy(m => m.Name).ToListAsync(cancellationToken);
+        // The account is joined in by hand: PaymentMethod deliberately has no navigation property to it
+        // (master data does not need to know what a finance module is), so there is nothing for EF to
+        // Include.
+        var methods = await _db.PaymentMethods
+            .AsNoTracking()
+            .OrderBy(m => m.Name)
+            .Select(m => new
+            {
+                Method = m,
+                AccountName = _db.FinancialAccounts
+                    .Where(a => a.Id == m.FinancialAccountId)
+                    .Select(a => a.Name)
+                    .FirstOrDefault()
+            })
+            .ToListAsync(cancellationToken);
 
         return methods
-            .Select(m => new PaymentMethodDto(
-                m.Id, m.Name, m.Kind, m.RequiresReference, m.ValidFrom, m.ValidTo, m.IsActive, m.IsInForceAt(now)))
+            .Select(x => new PaymentMethodDto(
+                x.Method.Id,
+                x.Method.Name,
+                x.Method.Kind,
+                x.Method.RequiresReference,
+                x.Method.FinancialAccountId,
+                x.AccountName,
+                x.Method.ValidFrom,
+                x.Method.ValidTo,
+                x.Method.IsActive,
+                x.Method.IsInForceAt(now)))
             .ToList();
     }
 }
 
+/// <param name="FinancialAccountId">
+/// Where money tendered this way lands (P7). Required in practice for every method that moves money — a
+/// payment through a method with no account behind it is refused, because the alternative is money that
+/// arrived nowhere and is missed by nobody. It must be null for store credit, which moves no money.
+/// </param>
 [RequiresPermission(FeatureCatalog.PaymentMethods, PermissionAction.Create)]
 public record CreatePaymentMethodCommand(
     string Name,
     PaymentMethodKind Kind,
     bool RequiresReference,
-    DateTimeOffset? ValidFrom) : IRequest<Guid>;
+    DateTimeOffset? ValidFrom,
+    Guid? FinancialAccountId = null) : IRequest<Guid>;
 
 public class CreatePaymentMethodCommandValidator : AbstractValidator<CreatePaymentMethodCommand>
 {
@@ -900,19 +931,35 @@ public class CreatePaymentMethodCommandHandler : IRequestHandler<CreatePaymentMe
             throw new ConflictException($"The payment method '{name}' already exists.");
         }
 
+        await EnsureAccountExistsAsync(_db, request.FinancialAccountId, cancellationToken);
+
         var method = new PaymentMethod
         {
             Name = name,
             Kind = request.Kind,
             RequiresReference = request.RequiresReference,
+            FinancialAccountId = request.FinancialAccountId,
             ValidFrom = request.ValidFrom ?? _clock.UtcNow,
             IsActive = true
         };
+
+        method.Validate();
 
         _db.PaymentMethods.Add(method);
         await _db.SaveChangesAsync(cancellationToken);
 
         return method.Id;
+    }
+
+    internal static async Task EnsureAccountExistsAsync(
+        IApplicationDbContext db,
+        Guid? accountId,
+        CancellationToken cancellationToken)
+    {
+        if (accountId is { } id && !await db.FinancialAccounts.AnyAsync(a => a.Id == id, cancellationToken))
+        {
+            throw new NotFoundException("Account", id);
+        }
     }
 }
 
@@ -923,7 +970,8 @@ public record UpdatePaymentMethodCommand(
     PaymentMethodKind Kind,
     bool RequiresReference,
     DateTimeOffset? ValidTo,
-    bool IsActive) : IRequest;
+    bool IsActive,
+    Guid? FinancialAccountId = null) : IRequest;
 
 public class UpdatePaymentMethodCommandValidator : AbstractValidator<UpdatePaymentMethodCommand>
 {
@@ -960,11 +1008,17 @@ public class UpdatePaymentMethodCommandHandler : IRequestHandler<UpdatePaymentMe
             throw new ConflictException("A payment method's validity must end after it begins.");
         }
 
+        await CreatePaymentMethodCommandHandler.EnsureAccountExistsAsync(
+            _db, request.FinancialAccountId, cancellationToken);
+
         method.Name = name;
         method.Kind = request.Kind;
         method.RequiresReference = request.RequiresReference;
+        method.FinancialAccountId = request.FinancialAccountId;
         method.ValidTo = request.ValidTo;
         method.IsActive = request.IsActive;
+
+        method.Validate();
 
         await _db.SaveChangesAsync(cancellationToken);
     }

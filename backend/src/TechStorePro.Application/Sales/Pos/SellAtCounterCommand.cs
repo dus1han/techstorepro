@@ -1,5 +1,6 @@
 using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Application.Common.Security;
+using TechStorePro.Application.Finance.Services;
 using TechStorePro.Application.Inventory.Services;
 using TechStorePro.Application.Sales.Deliveries;
 using TechStorePro.Application.Sales.Invoices;
@@ -88,6 +89,7 @@ public class SellAtCounterCommandHandler : IRequestHandler<SellAtCounterCommand,
     private readonly IApplicationDbContext _db;
     private readonly ITenantContext _tenant;
     private readonly IStockLedger _ledger;
+    private readonly IAccountLedger _accounts;
     private readonly ISalesLinePricer _pricer;
     private readonly IDiscountAuthorizer _discounts;
     private readonly IDocumentNumberGenerator _numbers;
@@ -97,6 +99,7 @@ public class SellAtCounterCommandHandler : IRequestHandler<SellAtCounterCommand,
         IApplicationDbContext db,
         ITenantContext tenant,
         IStockLedger ledger,
+        IAccountLedger accounts,
         ISalesLinePricer pricer,
         IDiscountAuthorizer discounts,
         IDocumentNumberGenerator numbers,
@@ -105,6 +108,7 @@ public class SellAtCounterCommandHandler : IRequestHandler<SellAtCounterCommand,
         _db = db;
         _tenant = tenant;
         _ledger = ledger;
+        _accounts = accounts;
         _pricer = pricer;
         _discounts = discounts;
         _numbers = numbers;
@@ -178,9 +182,13 @@ public class SellAtCounterCommandHandler : IRequestHandler<SellAtCounterCommand,
 
         // Cash is over-tendered constantly — the customer hands over 200 for a 168 sale. The change is
         // handed back, so only what the sale is worth is allocated to it.
+        //
+        // Settle() below is therefore also what keeps the till honest (P7): the money banked into the cash
+        // account is the sale, not the notes that crossed the counter. Bank the 200 and the drawer would
+        // claim 32 dirhams that walked out in the customer's pocket.
         var change = tendered - invoice.Total;
 
-        var paymentId = await new RecordPaymentCommandHandler(_db, _tenant, _numbers, _clock)
+        var paymentId = await new RecordPaymentCommandHandler(_db, _tenant, _numbers, _accounts, _clock)
             .PostAsync(
                 new RecordPaymentCommand(
                     CustomerId: request.CustomerId,

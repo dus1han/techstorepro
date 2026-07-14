@@ -1,10 +1,12 @@
 using TechStorePro.Application.Common.Exceptions;
 using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Application.Common.Security;
+using TechStorePro.Application.Finance.Services;
 using TechStorePro.Application.Inventory.Services;
 using TechStorePro.Application.Sales.Common;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Exceptions;
+using TechStorePro.Domain.Finance;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Domain.Sales;
@@ -45,12 +47,18 @@ public record ReturnLine(
 /// money never received would give the customer the shop's own money.
 /// </summary>
 [RequiresPermission(FeatureCatalog.CreditNotes, PermissionAction.Create)]
+/// <param name="RefundFromAccountId">
+/// The till or bank account the money is handed back out of (P7). Required for
+/// <see cref="RefundMethod.CashRefund"/> and <see cref="RefundMethod.BankRefund"/>, and meaningless for the
+/// other two — an offset moves no money, and a store credit is a promise rather than a payment.
+/// </param>
 public record IssueCreditNoteCommand(
     Guid SalesInvoiceId,
     IReadOnlyCollection<ReturnLine> Lines,
     RefundMethod Refund,
     string Reason,
     Guid? WarehouseId = null,
+    Guid? RefundFromAccountId = null,
     DateTimeOffset? IssuedAt = null,
     string? Notes = null) : IRequest<Guid>;
 
@@ -71,6 +79,13 @@ public class IssueCreditNoteCommandValidator : AbstractValidator<IssueCreditNote
             line.RuleFor(l => l.SalesInvoiceLineId).NotEmpty();
             line.RuleFor(l => l.Quantity).GreaterThan(0);
         });
+
+        // Money that physically leaves has to leave from somewhere. Without this the notes would come out
+        // of the drawer and the drawer would not know.
+        RuleFor(x => x.RefundFromAccountId)
+            .NotEmpty()
+            .When(x => x.Refund is RefundMethod.CashRefund or RefundMethod.BankRefund)
+            .WithMessage("A refund must say which account the money is handed back out of.");
     }
 }
 
@@ -79,6 +94,7 @@ public class IssueCreditNoteCommandHandler : IRequestHandler<IssueCreditNoteComm
     private readonly IApplicationDbContext _db;
     private readonly ITenantContext _tenant;
     private readonly IStockLedger _ledger;
+    private readonly IAccountLedger _accounts;
     private readonly IDocumentNumberGenerator _numbers;
     private readonly IDateTime _clock;
 
@@ -86,12 +102,14 @@ public class IssueCreditNoteCommandHandler : IRequestHandler<IssueCreditNoteComm
         IApplicationDbContext db,
         ITenantContext tenant,
         IStockLedger ledger,
+        IAccountLedger accounts,
         IDocumentNumberGenerator numbers,
         IDateTime clock)
     {
         _db = db;
         _tenant = tenant;
         _ledger = ledger;
+        _accounts = accounts;
         _numbers = numbers;
         _clock = clock;
     }
@@ -219,7 +237,7 @@ public class IssueCreditNoteCommandHandler : IRequestHandler<IssueCreditNoteComm
 
         creditNote.Validate();
 
-        await SettleAsync(creditNote, invoice, customer, cancellationToken);
+        await SettleAsync(creditNote, invoice, customer, request.RefundFromAccountId, cancellationToken);
 
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -283,6 +301,7 @@ public class IssueCreditNoteCommandHandler : IRequestHandler<IssueCreditNoteComm
         CreditNote creditNote,
         SalesInvoice invoice,
         Domain.Catalog.Customer customer,
+        Guid? refundFromAccountId,
         CancellationToken cancellationToken)
     {
         // The credit note, as a document: the customer owes this much less.
@@ -330,6 +349,30 @@ public class IssueCreditNoteCommandHandler : IRequestHandler<IssueCreditNoteComm
                 }
 
                 customer.Balance += creditNote.Total;
+
+                // And it leaves an account (P7). Notes that come out of a drawer the system does not know
+                // about are notes the cash position still thinks are there. The ledger refuses if the
+                // drawer cannot stand it — a shop cannot refund 500 in cash out of a till holding 300,
+                // however good the customer's claim is.
+                //
+                // Checked here and not only in the validator: handlers in this codebase are composed
+                // directly as well as dispatched (the till does it), and a rule that lived only in the
+                // FluentValidation pipeline would be a rule the composed path skips.
+                var refundAccount = refundFromAccountId
+                    ?? throw new DomainException(
+                        "A refund must say which account the money is handed back out of.");
+
+                await _accounts.PostAsync(
+                    new AccountPosting(
+                        refundAccount,
+                        -creditNote.Total,   // negative: money out
+                        AccountTransactionSource.CustomerRefund,
+                        $"{customer.Name} — refund on credit note {creditNote.Number}",
+                        BranchId: creditNote.BranchId,
+                        SourceId: creditNote.Id,
+                        SourceNumber: creditNote.Number,
+                        OccurredAt: creditNote.IssuedAt),
+                    cancellationToken);
                 break;
 
             default:
@@ -337,7 +380,5 @@ public class IssueCreditNoteCommandHandler : IRequestHandler<IssueCreditNoteComm
         }
 
         invoice.RefreshPaymentStatus();
-
-        await Task.CompletedTask;
     }
 }

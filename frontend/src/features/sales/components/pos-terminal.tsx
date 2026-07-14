@@ -61,10 +61,10 @@ export function PosTerminal() {
     useApiQuery<PagedResult<Customer>>(["customers"], "api/v1/customers", { pageSize: 200 }).data?.items ?? [];
   const branches = useApiQuery<PagedResult<Branch>>(["branches"], "api/v1/branches").data?.items ?? [];
   const warehouses = useApiQuery<WarehouseOption[]>(["warehouses"], "api/v1/warehouses").data ?? [];
-  const methods =
-    useApiQuery<PagedResult<PaymentMethod>>(["payment-methods"], "api/v1/payment-methods").data?.items ?? [];
-  const taxRates =
-    useApiQuery<PagedResult<TaxRateDto>>(["tax-rates"], "api/v1/tax-rates").data?.items ?? [];
+  // Both of these return a bare array, not a page. Typed as PagedResult they read .items off an array,
+  // get undefined, and fall back to [] — so the till silently offered no way to pay and taxed nothing.
+  const methods = useApiQuery<PaymentMethod[]>(["payment-methods"], "api/v1/payment-methods").data ?? [];
+  const taxRates = useApiQuery<TaxRateDto[]>(["tax-rates"], "api/v1/tax-rates").data ?? [];
 
   const totals = useMemo(() => {
     const net = cart.reduce(

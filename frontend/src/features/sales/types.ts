@@ -86,6 +86,16 @@ export const INVOICE_STATUS_LABELS: Record<SalesInvoiceStatus, string> = {
   [SalesInvoiceStatus.Cancelled]: "Cancelled",
 };
 
+export const PAYMENT_METHOD_KIND_LABELS: Record<PaymentMethodKind, string> = {
+  [PaymentMethodKind.Cash]: "Cash",
+  [PaymentMethodKind.BankTransfer]: "Bank transfer",
+  [PaymentMethodKind.Card]: "Card",
+  [PaymentMethodKind.Cheque]: "Cheque",
+  [PaymentMethodKind.Online]: "Online",
+  [PaymentMethodKind.Custom]: "Custom",
+  [PaymentMethodKind.StoreCredit]: "Store credit",
+};
+
 export const REFUND_LABELS: Record<RefundMethod, string> = {
   [RefundMethod.CashRefund]: "Cash refund",
   [RefundMethod.BankRefund]: "Bank refund",
@@ -302,5 +312,8 @@ export interface PaymentMethod {
   name: string;
   kind: PaymentMethodKind;
   requiresReference: boolean;
+  /** Where money tendered this way lands (P7). Null for store credit, which moves no money. */
+  financialAccountId: string | null;
+  financialAccountName: string | null;
   isActive: boolean;
 }

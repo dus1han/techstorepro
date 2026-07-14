@@ -12,11 +12,13 @@ using TechStorePro.Application.Sales.Payments;
 using TechStorePro.Application.Sales.Returns;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
+using TechStorePro.Domain.Finance;
 using TechStorePro.Domain.Identity;
 using TechStorePro.Domain.Inventory;
 using TechStorePro.Domain.Sales;
 using TechStorePro.Infrastructure.Catalog;
 using TechStorePro.Infrastructure.Configuration;
+using TechStorePro.Infrastructure.Finance;
 using TechStorePro.Infrastructure.Inventory;
 using TechStorePro.Infrastructure.Persistence;
 using TechStorePro.Infrastructure.Sales;
@@ -60,6 +62,8 @@ public class ReportsTests : IAsyncLifetime
     private Guid _overseasSupplier;
     private Guid _laptop;
     private Guid _cash;
+    private Guid _till;
+    private Guid _bankAccount;
 
     public async Task InitializeAsync()
     {
@@ -142,11 +146,38 @@ public class ReportsTests : IAsyncLifetime
         };
         seed.Products.Add(laptop);
 
+        // P7: money has to arrive somewhere, and the reports below are about money.
+        var till = new FinancialAccount
+        {
+            CompanyId = company.Id,
+            Name = "Till",
+            Kind = FinancialAccountKind.Cash,
+            CurrencyCode = "AED",
+            BranchId = branch.Id
+        };
+
+        // The supplier is paid from the bank, and the bank has an overdraft — as a real one does. These
+        // tests are about the payables arithmetic, not about whether the shop can afford the bill, and a
+        // fixture that had to fund the account before every test would be testing the account ledger twice.
+        // The cash till has no overdraft, because a drawer cannot have one; StockLedgerTests' sibling
+        // AccountLedgerTests is where that rule is actually proven.
+        var bank = new FinancialAccount
+        {
+            CompanyId = company.Id,
+            Name = "Bank",
+            Kind = FinancialAccountKind.Bank,
+            CurrencyCode = "AED",
+            AllowsOverdraft = true
+        };
+
+        seed.FinancialAccounts.AddRange(till, bank);
+
         var cash = new PaymentMethod
         {
             CompanyId = company.Id,
             Name = "Cash",
             Kind = PaymentMethodKind.Cash,
+            FinancialAccountId = till.Id,
             ValidFrom = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
         };
         seed.PaymentMethods.Add(cash);
@@ -185,6 +216,8 @@ public class ReportsTests : IAsyncLifetime
         _overseasSupplier = supplier.Id;
         _laptop = laptop.Id;
         _cash = cash.Id;
+        _till = till.Id;
+        _bankAccount = bank.Id;
     }
 
     public Task DisposeAsync() => _postgres.DisposeAsync().AsTask();
@@ -506,7 +539,7 @@ public class ReportsTests : IAsyncLifetime
         decimal amount,
         IReadOnlyCollection<AllocationLine>? allocations,
         DateTimeOffset? paidAt = null) =>
-        await new RecordPaymentCommandHandler(db, Tenant(), Numbers(db), new StubClock())
+        await new RecordPaymentCommandHandler(db, Tenant(), Numbers(db), Accounts(db), new StubClock())
             .Handle(
                 new RecordPaymentCommand(
                     CustomerId: _customer,
@@ -521,14 +554,18 @@ public class ReportsTests : IAsyncLifetime
         Guid invoiceId,
         RefundMethod refund,
         params ReturnLine[] lines) =>
-        await new IssueCreditNoteCommandHandler(db, Tenant(), Ledger(db), Numbers(db), new StubClock())
+        await new IssueCreditNoteCommandHandler(
+                db, Tenant(), Ledger(db), Accounts(db), Numbers(db), new StubClock())
             .Handle(
                 new IssueCreditNoteCommand(
                     SalesInvoiceId: invoiceId,
                     Lines: lines,
                     Refund: refund,
                     Reason: "Returned",
-                    WarehouseId: _warehouseOfA),
+                    WarehouseId: _warehouseOfA,
+                    RefundFromAccountId: refund is RefundMethod.CashRefund or RefundMethod.BankRefund
+                        ? _till
+                        : null),
                 CancellationToken.None);
 
     private async Task<Guid> SupplierInvoiceAsync(
@@ -557,7 +594,7 @@ public class ReportsTests : IAsyncLifetime
         string currency,
         decimal rate,
         IReadOnlyCollection<SupplierAllocationLine>? allocations) =>
-        await new PaySupplierCommandHandler(db, Numbers(db), new StubClock())
+        await new PaySupplierCommandHandler(db, Tenant(), Accounts(db), Numbers(db), new StubClock())
             .Handle(
                 new PaySupplierCommand(
                     SupplierId: _overseasSupplier,
@@ -566,7 +603,11 @@ public class ReportsTests : IAsyncLifetime
                     Amount: amount,
                     Allocations: allocations,
                     CurrencyCode: currency,
-                    ExchangeRate: rate),
+                    ExchangeRate: rate,
+
+                    // Out of the bank, not the till. A shop does not wire dollars to Shenzhen out of the
+                    // cash drawer, and the drawer would not have it.
+                    FinancialAccountId: _bankAccount),
                 CancellationToken.None);
 
     /// <summary>Puts stock on the shelf at a known cost, through the ledger, the way P4 does.</summary>
@@ -599,6 +640,9 @@ public class ReportsTests : IAsyncLifetime
             new StubTenant(_companyA),
             new StubClock(),
             new WeightedAverageCosting());
+
+    private AccountLedger Accounts(ApplicationDbContext db) =>
+        new(new ApplicationDbContextAccessor(db), db, new StubTenant(_companyA), new StubClock());
 
     private DocumentNumberGenerator Numbers(ApplicationDbContext db) =>
         new(new ApplicationDbContextAccessor(db), db, new StubTenant(_companyA), new StubClock());
