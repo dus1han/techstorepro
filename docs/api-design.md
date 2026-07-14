@@ -414,16 +414,55 @@ invoice arrived, there is no stock left to carry that cost: the remainder is rep
 the shipment, rather than silently dropped (which would overstate margin) or smeared over whatever else
 is on the shelf (which would charge one container's freight to another's goods).
 
-### Still planned
-
-Sketches, not contracts — the shape below is what the phase expects to need, and the endpoints that
-actually shipped for P1–P6 are the ones above.
+### Reports (P7)
 
 ```
-# Finance and reporting (P7)
+GET    /api/v1/reports/receivables-ageing        ?asOf=&customerId=&branchId=
+GET    /api/v1/reports/payables-ageing           ?asOf=&supplierId=
+GET    /api/v1/reports/customer-statement/{id}   ?from=&to=
+GET    /api/v1/reports/supplier-statement/{id}   ?from=&to=
+```
+
+Read-only, all four — `View` and `Export` and nothing else, on two new features (`reports.receivables`,
+`reports.payables`). There is no `Create` on a report.
+
+**Each one returns a `variance`, and it is the field to look at first.** `Customer.Balance` and
+`Supplier.Balance` are stored figures, maintained by hand wherever a document moves money, with no rebuild
+path — so a report that merely *added up the invoices* would be a second opinion, not a proof. These
+rebuild the position from the documents and subtract the stored balance. Zero means the cache and the
+documents agree. Anything else is drift, and the shop wants to hear about it on the day rather than at the
+year end.
+
+Getting that to come out at zero is most of the work, because the invoices and the balance disagree by
+construction in two places:
+
+- **An offset credit note moves the balance and not the invoice.** It writes no allocation, so the invoice
+  it credits keeps its full outstanding and stays `Posted` for ever. Age the invoice alone and a
+  fully-credited debt sits in the ninety-day column until the end of time. The report nets credit notes per
+  invoice; a store-credit or refund credit note is *not* netted, because neither moves the balance either.
+- **An unallocated payment moves the balance and not the invoice**, the other way. It surfaces as
+  `credits` (receivables) or `advances` (payables) rather than being buried in the buckets — a customer who
+  owes 10,000 at ninety days while sitting on a 9,000 advance is a different conversation from one who owes
+  1,000.
+
+Buckets are days **overdue**, not days since the invoice: `Current / 1–30 / 31–60 / 61–90 / 90+`, measured
+from `DueAt`, which falls back to the document date where no terms were given (null means *due on receipt*,
+not *never due* — read the other way, every counter sale drops out of the report).
+
+A payable is valued at **the rate its invoice was booked at**, never today's. That is the only valuation
+that reconciles to the balance, and revaluing an open payable would book an unrealised FX gain — a concept
+this system does not have anywhere (§45 D8). So the detail rows carry both figures: what the supplier will
+ask for (USD 1,000) and what it costs the shop (AED 3,670, at 3.67).
+
+### Still planned
+
+Sketches, not contracts.
+
+```
+# Finance and reporting (P7, remaining)
 GET    /api/v1/reports/sales-summary    ?from=&to=&groupBy=product|salesperson|branch
 GET    /api/v1/reports/stock-valuation
-GET    /api/v1/reports/receivables-ageing
+GET    /api/v1/reports/profit-and-loss  revenue − COGS − expenses (§45 D3 — computed, not a GL extract)
 GET    /api/v1/reports/repair-profitability   P6 already computes the per-job margin; this aggregates it
 GET    /api/v1/expenses                 POST — including the unabsorbed import cost P4 recorded and the
                                         warranty repairs P6 costed but never billed

@@ -14,7 +14,15 @@
 > **P4 had been marked ✅ while half of it did not exist** — the entities and tables for purchase orders,
 > supplier invoices and supplier payments were real, but nothing above them was, so the FX gain the phase
 > describes had nowhere to be computed. That is closed; see P4 below for what was missing and why nobody
-> noticed. **P7 (finance, reporting, dashboard) is next**, and nothing blocks it.
+> noticed.
+>
+> **P7 is under way.** Its first slice — receivables, payables and statements — added no tables: the
+> documents that answer "who owes what" have existed since P4 and P5, and what was missing was only the
+> arithmetic that reads them. It reports a **variance** on every row, because the balances it reports on are
+> hand-maintained caches that nothing had ever checked; it comes out at zero, and the tests fail if it does
+> not. Proving it also turned up a real modelling gap in P5 — **a credit note writes no allocation, so a
+> fully-credited invoice shows as unpaid for ever** — which the reports work around and the debt register
+> now names.
 >
 > Phases are numbered P0–P9 and match [architecture.md §6](architecture.md). The earlier M0–M8
 > milestone numbering is gone: it mapped almost one-to-one, and keeping two schemes alive only
@@ -407,7 +415,7 @@ and shows the answer in words the clerk can read out to the customer standing in
 **Not built: repair photos** (§28). They are attachments, and where attachments live is **Q9**, which is
 still open. Inventing a storage layer to answer it would be answering it. Recorded as debt below.
 
-### P7 — Finance, reporting, dashboard
+### P7 — Finance, reporting, dashboard 🟡 in progress
 
 Receivables/payables ageing, statements, cash and bank accounts, expenses, the §35 report set, the
 §36 dashboard, §37 global search.
@@ -415,6 +423,81 @@ Receivables/payables ageing, statements, cash and bank accounts, expenses, the �
 - ✅ Resolved: **no general ledger** (§45 D3). P&L is computed (revenue − COGS − expenses) and the
   books export to an external accounting package. It will not reconcile line-for-line to an
   accountant's ledger — an accepted trade, recorded so nobody rediscovers it as a surprise.
+
+#### Slice 1 — receivables, payables, statements ✅ done
+
+**No new tables.** The documents that answer "who owes what" have all existed since P4 and P5; nothing was
+missing but the arithmetic that reads them. Two new features (`reports.receivables`, `reports.payables`),
+read-only — there is no `Create` on a report.
+
+**The report's job is to prove the balance, not to restate it.** `Customer.Balance` and `Supplier.Balance`
+are stored decimals, maintained by hand in eleven places between them, with no rebuild path and — until
+now — nothing that ever summed the documents back to check. `Party.cs` has said since P2 that the balance
+is "a cache of the ledger, and P7's receivables report must be able to prove it". So every report carries a
+**variance**: the position rebuilt from the documents, minus the stored figure. Zero, or the shop is told.
+
+Getting that zero is the whole of the work, because **the invoices and the balance disagree by
+construction**, in two places, both deliberate and neither obvious:
+
+1. **An offset credit note moves the balance and not the invoice.** Issuing one takes its total off
+   `Customer.Balance` and writes no allocation row — so the invoice keeps its full `OutstandingAmount` and
+   stays `Posted` for ever. **A report that aged the invoice alone would chase a customer, in the
+   ninety-day column, for a debt they had already returned the goods for — and would go on doing it for the
+   life of the system.** Verified against the live API: after the credit note the invoice still reads
+   `Posted, outstanding 2,000`, and the ageing correctly reads zero.
+2. **An unallocated payment moves the balance and not the invoice**, in the other direction. Money on
+   account is shown as a credit against the customer rather than netted into the buckets, because someone
+   who owes 10,000 at ninety days while sitting on a 9,000 advance is a different phone call from someone
+   who owes 1,000.
+
+Only an `OffsetAgainstBalance` credit note is netted, and the asymmetry is the point: a store-credit note
+leaves the debt standing and hands over a voucher (a memo on the report, and a payment on the day it is
+spent), and a cash refund is raised only against an invoice already paid. Neither moves the balance, so
+netting either would break the very identity the report exists to demonstrate:
+
+```
+Σ (invoice outstanding − offset credit notes)  −  unallocated payments  =  Customer.Balance
+Σ (invoice outstanding × the invoice's rate)   −  advances              =  Supplier.Balance
+```
+
+**A payable is valued at the rate its invoice was booked at, never today's.** It is the only valuation that
+reconciles — the balance was raised at that rate and is discharged at that rate, which is what makes the
+AED residue a *realised* gain when the money finally leaves (P4). Revaluing an open payable at spot would
+book an **unrealised** gain, and this system has no such concept anywhere; inventing one inside a report
+would be the wrong end of the system to invent it at. So the detail carries both numbers: what Shenzhen
+will ask for (USD 1,000) and what it costs the shop (AED 3,670, at 3.67).
+
+**Buckets are days overdue, not days since the invoice.** An invoice raised ninety days ago on sixty-day
+terms is thirty days late, and a report that called it ninety would have the shop chasing a customer who is
+behaving exactly as agreed. `DueAt` is null on a counter sale, and null means **due on receipt** — read as
+"never due" it would drop every walk-in out of every bucket, which is to say it would under-report the debt
+by precisely the sales least likely to be paid.
+
+**Tests: 358 → 368.** Ten new, against a real Postgres, and the assertion that matters in every one of them
+is `variance == 0`: with money on account, with an offset credit note, with a store-credit note that must
+*not* net, with an advance to an overseas supplier, and with a foreign payable settled at a rate it was
+never booked at. **Verified end to end against the live API**, not only by tests: a shop was onboarded, two
+invoices raised, one paid in part and 800 left on account, a USD 1,000 bill booked at 3.67 and a USD 500
+advance paid at 3.60 — receivables came out at 1,800 / 2,000 / 800 on account, net 3,000; payables at
+AED 3,670 due less an AED 1,800 advance, net 1,870; and both variances zero.
+
+**The screens.** `/reports/receivables` and `/reports/payables` — a bucket grid sorted by what is owed
+rather than by name, because this is a screen somebody opens to decide who to telephone this morning. A
+statement drawer behind each row opens the account: opening balance, every movement, closing balance, and
+the running column their finance person will actually read.
+
+#### Still to build
+
+Cash and bank accounts, expenses (§34), the §35 report set including the computed P&L, the §36 dashboard,
+§37 global search.
+
+**A modelling gap this slice found and did not close.** A credit note does not write an allocation against
+the invoice it credits, so the invoice can never reach `Paid` and its status is a lie the moment it is
+credited. The reports work around it correctly, but *the invoice list still shows the invoice as unpaid and
+overdue* — the workaround lives in the reports and does not reach the screens P5 built. Closing it properly
+means a credit note allocating against the invoice the way a payment does, which is a change to settled,
+proven P5 code and a migration, and it deserves its own decision rather than being smuggled in here.
+Recorded as debt below.
 
 ### P8 — Platform / SaaS
 
@@ -454,6 +537,7 @@ Recorded rather than hidden. Each has an owning phase; none is a reason to stop.
 | Postgres RLS not enabled | The EF query filter is enforced centrally and proven by tests. RLS would stop even a raw SQL query that bypassed it. | Before production (database-design.md §1). |
 | **Frontend types still hand-written** | `types/*.ts` mirror the API by hand. A renamed API field compiles fine on the client and fails at runtime. **P3 added the `codegen` script** that generates them from `/openapi/v1.json`; the hand-written types are still what the app imports, so the drift is now *checkable* but not yet *impossible*. Rolled from P4 (which built no screens), then from P5, and **P6 added a third hand-written module to the pile**. Every phase that ships screens without closing it makes it more expensive to close. | **P7**, and it should stop being deferred — it is the oldest live debt in the project. |
 | **Repair photos not built** (§28) | A technician cannot attach the picture of the cracked screen the customer will later dispute — the one piece of evidence the intake notes exist to replace. This is a *scoped omission*, not an oversight: photos are attachments, and **where attachments live is Q9**, which is open. Building a storage layer to hold them would be answering Q9 by accident. | **Q9, then P9.** The rest of P6 does not depend on it. |
+| **A credit note writes no allocation against the invoice it credits** | Found by P7 slice 1. Issuing one moves `Customer.Balance` but leaves the invoice at its full `OutstandingAmount` and `Posted` — so **a fully-credited invoice shows on the sales-invoice screen as unpaid and overdue, for ever**, and its status can never reach `Paid`. The receivables report nets credit notes per invoice and therefore reconciles, but the fix lives in the *report*, not in the model, so every other reader of the invoice still sees the wrong number. Closing it means a credit note allocating against the invoice the way a payment does — a change to proven P5 code plus a migration, and a decision worth taking on its own rather than smuggling into a reporting slice. | **P7**, before the dashboard reads invoice status. |
 | ~~**P4 and P5 have no screens**~~ | **Closed.** Sales landed its seven screens in P5 slice 4; purchasing now has its five — goods receipts, orders, supplier invoices, supplier payments, imports and landed cost. Closing it surfaced the larger problem: P4 had no *endpoints* for half of what it claimed either (see P4 above). | ✅ |
 | ~~Product delete does not check stock~~ | **Closed in P3.** Retiring a product now fails if it has stock on hand or live serials, and names the warehouses. | ✅ |
 | ~~Update/delete missing on some reference data~~ | **Closed in P3.** Brands, tax rates, price tiers, payment methods and discounts can now be edited and retired. A tax rate's **percent** is deliberately not editable — changing it in place would restate the tax on invoices already issued — so `POST /tax-rates/{id}/supersede` closes the old rate and opens its successor. | ✅ |

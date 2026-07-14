@@ -68,6 +68,14 @@ const NAV: { section: string; items: NavItem[] }[] = [
     ],
   },
   {
+    section: "Finance",
+    items: [
+      // Receivables first: money owed to the shop is chased daily, money the shop owes is paid on terms.
+      { href: "/reports/receivables", label: "Receivables", feature: FEATURES.receivables },
+      { href: "/reports/payables", label: "Payables", feature: FEATURES.payables },
+    ],
+  },
+  {
     section: "Inventory",
     items: [
       { href: "/inventory/stock", label: "Stock on hand", feature: FEATURES.stock },

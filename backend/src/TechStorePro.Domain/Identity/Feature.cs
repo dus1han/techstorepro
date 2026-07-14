@@ -82,6 +82,10 @@ public static class FeatureCatalog
     public const string Outsourcing = "repairs.outsourcing";
     public const string Warranties = "repairs.warranties";
 
+    // --- P7: finance and reporting ---
+    public const string Receivables = "reports.receivables";
+    public const string Payables = "reports.payables";
+
     private static readonly PermissionAction[] ReadOnly = [PermissionAction.View, PermissionAction.Export];
 
     private static readonly PermissionAction[] Full =
@@ -206,7 +210,14 @@ public static class FeatureCatalog
 
         // Approve is what honours a claim — it is the grant that decides the shop eats the cost of a repair
         // rather than the customer. Rejecting one is the same decision in the other direction.
-        new() { Code = Warranties, Module = "Repairs", Name = "Warranties & claims", DisplayOrder = 540, SupportedActions = ManageAndApprove }
+        new() { Code = Warranties, Module = "Repairs", Name = "Warranties & claims", DisplayOrder = 540, SupportedActions = ManageAndApprove },
+
+        // Reports are ReadOnly — View and Export, and nothing else. There is no Create on a report: it
+        // reads documents that already exist and writes nothing back. The grant is worth being deliberate
+        // about all the same, because "what is every customer's debt, and how old is it" is the most
+        // commercially sensitive question the system can answer, and the shop floor does not need to ask it.
+        new() { Code = Receivables, Module = "Reports", Name = "Receivables & statements", DisplayOrder = 610, SupportedActions = ReadOnly },
+        new() { Code = Payables, Module = "Reports", Name = "Payables & statements", DisplayOrder = 620, SupportedActions = ReadOnly }
     ];
 
     public static bool Exists(string code) => All.Any(f => f.Code == code);

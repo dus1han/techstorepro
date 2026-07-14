@@ -85,6 +85,12 @@ export const FEATURES = {
   repairParts: "repairs.parts",
   outsourcing: "repairs.outsourcing",
   warranties: "repairs.warranties",
+
+  // P7 — finance. View and Export only: a report writes nothing back. The grant is still worth being
+  // deliberate about, because "what does every customer owe, and how old is it" is the most commercially
+  // sensitive question the system can answer.
+  receivables: "reports.receivables",
+  payables: "reports.payables",
 } as const;
 
 export interface Permission {
