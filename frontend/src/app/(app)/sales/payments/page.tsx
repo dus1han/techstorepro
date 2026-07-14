@@ -2,7 +2,7 @@
 
 import { Can } from "@/components/auth/can";
 import { DataTable, type Column } from "@/components/data/data-table";
-import { Money } from "@/features/sales/components/money";
+import { Money } from "@/components/ui/money";
 import type { CustomerPayment } from "@/features/sales/types";
 import { FEATURES, PermissionAction } from "@/types/identity";
 

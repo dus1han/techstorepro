@@ -7,7 +7,7 @@ import { DataTable, type Column } from "@/components/data/data-table";
 import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import { cancelOrder, confirmOrder, deliver, raiseInvoice } from "@/features/sales/api";
-import { Money, StatusBadge } from "@/features/sales/components/money";
+import { Money, StatusBadge } from "@/components/ui/money";
 import { ORDER_STATUS_LABELS, SalesOrderStatus, type SalesOrder } from "@/features/sales/types";
 import { FEATURES, PermissionAction } from "@/types/identity";
 

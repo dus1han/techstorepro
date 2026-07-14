@@ -2,6 +2,9 @@ using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Application.Inventory.Services;
 using TechStorePro.Application.Purchasing.GoodsReceipts;
 using TechStorePro.Application.Purchasing.Imports;
+using TechStorePro.Application.Purchasing.Invoices;
+using TechStorePro.Application.Purchasing.Orders;
+using TechStorePro.Application.Purchasing.Payments;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Exceptions;
@@ -44,6 +47,7 @@ public class PurchasingTests : IAsyncLifetime
 
     private Guid _laptop;   // serial-tracked, 1,000 a unit
     private Guid _cable;    // untracked, 50 a unit
+    private Guid _bankTransfer;
 
     public async Task InitializeAsync()
     {
@@ -92,12 +96,24 @@ public class PurchasingTests : IAsyncLifetime
 
         seed.Products.AddRange(laptop, cable);
 
+        var bankTransfer = new PaymentMethod
+        {
+            CompanyId = company.Id,
+            Name = "Bank transfer",
+            Kind = PaymentMethodKind.BankTransfer,
+            RequiresReference = true
+        };
+
+        seed.PaymentMethods.Add(bankTransfer);
+
         // Every document takes a number, and the sequences must exist before the first one is raised.
         foreach (var (type, prefix) in new[]
                  {
                      (DocumentType.GoodsReceipt, "GRN"),
                      (DocumentType.ImportShipment, "IMP"),
-                     (DocumentType.PurchaseOrder, "PO")
+                     (DocumentType.PurchaseOrder, "PO"),
+                     (DocumentType.SupplierInvoice, "SINV"),
+                     (DocumentType.SupplierPayment, "SPAY")
                  })
         {
             seed.DocumentNumberSequences.Add(new DocumentNumberSequence
@@ -121,6 +137,7 @@ public class PurchasingTests : IAsyncLifetime
         _supplier = supplier.Id;
         _laptop = laptop.Id;
         _cable = cable.Id;
+        _bankTransfer = bankTransfer.Id;
     }
 
     public Task DisposeAsync() => _postgres.DisposeAsync().AsTask();
@@ -397,10 +414,533 @@ public class PurchasingTests : IAsyncLifetime
         (await fresh.StockBalances.SingleAsync(b => b.ProductId == _cable)).AverageCost.Should().Be(55m);
     }
 
+    // --- Purchase orders --------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Goods_cannot_be_received_against_an_unapproved_order()
+    {
+        // Approving is what commits the company's money, and it is the gate on receiving. A draft that
+        // could take delivery would make the approval a formality nobody had to perform.
+        await using var db = CreateContext(_companyA);
+
+        var orderId = await CreateOrderAsync(db, (_cable, 100m, 50m));
+
+        var act = async () => await ReceiveAgainstOrderAsync(db, orderId);
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*Approve it first*");
+    }
+
+    [Fact]
+    public async Task Receiving_against_an_order_ticks_it_off_and_closes_it()
+    {
+        await using var db = CreateContext(_companyA);
+
+        var orderId = await CreateOrderAsync(db, (_cable, 100m, 50m));
+        await ApproveOrderAsync(db, orderId);
+
+        await ReceiveAgainstOrderAsync(db, orderId);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var order = await fresh.PurchaseOrders.Include(o => o.Lines).FirstAsync(o => o.Id == orderId);
+
+        order.Status.Should().Be(PurchaseOrderStatus.Received);
+        order.Lines.Single().ReceivedQuantity.Should().Be(100m);
+        order.IsFullyReceived.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_part_delivery_leaves_the_order_open()
+    {
+        // The supplier sent 60 of the 100 ordered. The order is not done, and closing it would lose the
+        // shop's claim to the other forty.
+        await using var db = CreateContext(_companyA);
+
+        var orderId = await CreateOrderAsync(db, (_cable, 100m, 50m));
+        await ApproveOrderAsync(db, orderId);
+
+        await ReceiveAgainstOrderAsync(db, orderId, quantity: 60m);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var order = await fresh.PurchaseOrders.Include(o => o.Lines).FirstAsync(o => o.Id == orderId);
+
+        order.Status.Should().Be(PurchaseOrderStatus.PartiallyReceived);
+        order.Lines.Single().OutstandingQuantity.Should().Be(40m);
+    }
+
+    [Fact]
+    public async Task An_order_closes_even_when_the_receipt_does_not_name_its_lines()
+    {
+        // The regression this exists for was silent and expensive. A receipt that named the order but not
+        // its individual lines posted the stock, captured the serials — and left the order sitting at
+        // Approved for ever. Fully delivered, still showing as outstanding, and chased. Nothing errored,
+        // so nobody found out until someone asked why the supplier kept sending goods that had already
+        // arrived.
+        await using var db = CreateContext(_companyA);
+
+        var orderId = await CreateOrderAsync(db, (_cable, 100m, 50m));
+        await ApproveOrderAsync(db, orderId);
+
+        var handler = new ReceiveGoodsCommandHandler(db, Ledger(db), Numbers(db), new StubClock());
+
+        await handler.Handle(
+            new ReceiveGoodsCommand(
+                SupplierId: _supplier,
+                BranchId: _branchOfA,
+                WarehouseId: _warehouseOfA,
+
+                // No PurchaseOrderLineId — the caller names the order and nothing more.
+                Lines: [new ReceiveLine(_cable, Quantity: 100, UnitPrice: 50m)],
+                PurchaseOrderId: orderId),
+            CancellationToken.None);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var order = await fresh.PurchaseOrders.Include(o => o.Lines).FirstAsync(o => o.Id == orderId);
+
+        order.Status.Should().Be(PurchaseOrderStatus.Received, "everything on it arrived");
+        order.Lines.Single().ReceivedQuantity.Should().Be(100m);
+
+        // And the receipt remembers which line it fulfilled, so the next one need not guess again.
+        var receiptLine = await fresh.GoodsReceiptLines.FirstAsync(l => l.ProductId == _cable);
+        receiptLine.PurchaseOrderLineId.Should().Be(order.Lines.Single().Id);
+    }
+
+    [Fact]
+    public async Task An_order_that_goods_have_arrived_against_cannot_be_cancelled()
+    {
+        // The stock is on the shelf and the supplier will invoice for it. An order claiming it never
+        // happened would leave the receipt pointing at nothing.
+        await using var db = CreateContext(_companyA);
+
+        var orderId = await CreateOrderAsync(db, (_cable, 100m, 50m));
+        await ApproveOrderAsync(db, orderId);
+        await ReceiveAgainstOrderAsync(db, orderId);
+
+        var handler = new CancelPurchaseOrderCommandHandler(db);
+
+        var act = async () => await handler.Handle(
+            new CancelPurchaseOrderCommand(orderId, "changed our minds"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*already been received*");
+    }
+
+    [Fact]
+    public async Task An_order_does_not_move_stock()
+    {
+        // Only the goods receipt does. An order that reserved or booked stock would have the shop
+        // selling laptops that are still in a factory in Shenzhen.
+        await using var db = CreateContext(_companyA);
+
+        var orderId = await CreateOrderAsync(db, (_laptop, 10m, 1_000m));
+        await ApproveOrderAsync(db, orderId);
+
+        await using var fresh = CreateContext(_companyA);
+
+        (await fresh.StockMovements.AnyAsync()).Should().BeFalse();
+        (await fresh.StockBalances.AnyAsync()).Should().BeFalse();
+    }
+
+    // --- Supplier invoices ------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Posting_an_invoice_puts_the_debt_on_the_supplier_and_moves_no_stock()
+    {
+        // The receipt already moved the stock. An invoice that moved it as well would double it.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, new ReceiveLine(_cable, 100, 50m));
+
+        var movementsAfterReceipt = await db.StockMovements.CountAsync();
+
+        await RecordInvoiceAsync(db, total: 5_000m);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var supplier = await fresh.Suppliers.FirstAsync(s => s.Id == _supplier);
+        supplier.Balance.Should().Be(5_000m, "posting the invoice is what creates the debt");
+
+        (await fresh.StockMovements.CountAsync()).Should().Be(
+            movementsAfterReceipt,
+            "the goods receipt moved the stock; the invoice must not move it again");
+    }
+
+    [Fact]
+    public async Task A_draft_invoice_owes_nothing_until_it_is_posted()
+    {
+        // A bill somebody is still checking against the receipt is not yet a debt.
+        await using var db = CreateContext(_companyA);
+
+        var invoiceId = await RecordInvoiceAsync(db, total: 5_000m, post: false);
+
+        (await db.Suppliers.FirstAsync(s => s.Id == _supplier)).Balance.Should().Be(0m);
+
+        await using var second = CreateContext(_companyA);
+
+        var handler = new PostSupplierInvoiceCommandHandler(second);
+        await handler.Handle(new PostSupplierInvoiceCommand(invoiceId), CancellationToken.None);
+
+        await using var fresh = CreateContext(_companyA);
+        (await fresh.Suppliers.FirstAsync(s => s.Id == _supplier)).Balance.Should().Be(5_000m);
+    }
+
+    [Fact]
+    public async Task An_invoice_billed_in_a_foreign_currency_owes_base_currency_at_the_invoice_rate()
+    {
+        // The supplier bills USD 1,000. What the shop owes is a number in AED, and it is fixed on the
+        // day the invoice is raised — not re-read later, or the debt would move with the market.
+        await using var db = CreateContext(_companyA);
+
+        await RecordInvoiceAsync(db, total: 1_000m, currency: "USD", rate: 3.67m);
+
+        await using var fresh = CreateContext(_companyA);
+
+        (await fresh.Suppliers.FirstAsync(s => s.Id == _supplier)).Balance.Should().Be(3_670m);
+    }
+
+    // --- Supplier payments, and the FX gain the phase was really about ----------------------------
+
+    [Fact]
+    public async Task Paying_a_local_invoice_clears_the_balance()
+    {
+        await using var db = CreateContext(_companyA);
+
+        var invoiceId = await RecordInvoiceAsync(db, total: 5_000m);
+
+        await PayAsync(db, amount: 5_000m, allocations: [new SupplierAllocationLine(invoiceId, 5_000m)]);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var invoice = await fresh.SupplierInvoices
+            .Include(i => i.Lines)
+            .Include(i => i.Allocations)
+            .FirstAsync(i => i.Id == invoiceId);
+
+        invoice.Status.Should().Be(SupplierInvoiceStatus.Paid);
+        invoice.OutstandingAmount.Should().Be(0m);
+
+        (await fresh.Suppliers.FirstAsync(s => s.Id == _supplier)).Balance.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task A_dollar_invoice_paid_at_a_better_rate_realises_a_gain_and_still_clears_the_balance()
+    {
+        // The worked example from the plan, and the one piece of arithmetic in this module that is easy
+        // to get wrong.
+        //
+        // A USD 1,000 invoice booked at 3.67 is a debt of AED 3,670. Pay it when the rate is 3.60 and
+        // only AED 3,600 leaves the bank. The shop is AED 70 better off — a gain it made by owing
+        // dollars, not by selling anything.
+        //
+        // The trap: subtract only what left the bank, and the supplier's balance keeps AED 70 owing
+        // forever, on an invoice that is fully settled in the currency it was billed in. No amount of
+        // paying would ever clear it, because the residue is not a debt — it is the gain.
+        await using var db = CreateContext(_companyA);
+
+        var invoiceId = await RecordInvoiceAsync(db, total: 1_000m, currency: "USD", rate: 3.67m);
+
+        (await db.Suppliers.FirstAsync(s => s.Id == _supplier)).Balance.Should().Be(3_670m);
+
+        var paymentId = await PayAsync(
+            db,
+            amount: 1_000m,
+            allocations: [new SupplierAllocationLine(invoiceId, 1_000m)],
+            currency: "USD",
+            rate: 3.60m);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var payment = await fresh.SupplierPayments
+            .Include(p => p.Allocations)
+            .FirstAsync(p => p.Id == paymentId);
+
+        payment.AmountBase.Should().Be(3_600m, "that is what actually left the bank");
+        payment.ExchangeGainOrLoss.Should().Be(70m, "the dirham strengthened between invoice and payment");
+
+        var invoice = await fresh.SupplierInvoices
+            .Include(i => i.Lines)
+            .Include(i => i.Allocations)
+            .FirstAsync(i => i.Id == invoiceId);
+
+        invoice.Status.Should().Be(SupplierInvoiceStatus.Paid, "USD 1,000 billed, USD 1,000 paid");
+
+        (await fresh.Suppliers.FirstAsync(s => s.Id == _supplier)).Balance.Should().Be(
+            0m,
+            "the debt is gone — the 70 the shop kept is a gain, not an amount still owed");
+    }
+
+    [Fact]
+    public async Task An_fx_gain_does_not_touch_the_cost_of_the_stock()
+    {
+        // The laptops did not become cheaper to buy; the currency moved. Folding the gain back into the
+        // moving average would restate the cost of stock that arrived years ago (D1), and it would never
+        // wash out.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(
+            db,
+            new ReceiveLine(_cable, Quantity: 10, UnitPrice: 100m),
+            currencyCode: "USD",
+            exchangeRate: 3.67m);
+
+        var costAfterReceipt =
+            (await db.StockBalances.SingleAsync(b => b.ProductId == _cable)).AverageCost;
+
+        costAfterReceipt.Should().Be(367m);
+
+        var invoiceId = await RecordInvoiceAsync(db, total: 1_000m, currency: "USD", rate: 3.67m);
+
+        await PayAsync(
+            db,
+            amount: 1_000m,
+            allocations: [new SupplierAllocationLine(invoiceId, 1_000m)],
+            currency: "USD",
+            rate: 3.60m);
+
+        await using var fresh = CreateContext(_companyA);
+
+        (await fresh.StockBalances.SingleAsync(b => b.ProductId == _cable)).AverageCost.Should().Be(
+            costAfterReceipt,
+            "the gain belongs in the P&L, not in the cost of the goods");
+    }
+
+    [Fact]
+    public async Task One_transfer_settles_three_invoices()
+    {
+        // The reason a payment is a header plus allocations rather than a column on an invoice. A shop
+        // that pays its supplier monthly does this constantly.
+        await using var db = CreateContext(_companyA);
+
+        var first = await RecordInvoiceAsync(db, total: 1_000m, reference: "SUP-001");
+        var second = await RecordInvoiceAsync(db, total: 2_000m, reference: "SUP-002");
+        var third = await RecordInvoiceAsync(db, total: 3_000m, reference: "SUP-003");
+
+        await PayAsync(
+            db,
+            amount: 6_000m,
+            allocations:
+            [
+                new SupplierAllocationLine(first, 1_000m),
+                new SupplierAllocationLine(second, 2_000m),
+                new SupplierAllocationLine(third, 3_000m)
+            ]);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var invoices = await fresh.SupplierInvoices
+            .Include(i => i.Lines)
+            .Include(i => i.Allocations)
+            .ToListAsync();
+
+        invoices.Should().OnlyContain(i => i.Status == SupplierInvoiceStatus.Paid);
+        (await fresh.Suppliers.FirstAsync(s => s.Id == _supplier)).Balance.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task One_invoice_is_settled_by_two_instalments()
+    {
+        await using var db = CreateContext(_companyA);
+
+        var invoiceId = await RecordInvoiceAsync(db, total: 5_000m);
+
+        await PayAsync(db, amount: 2_000m, allocations: [new SupplierAllocationLine(invoiceId, 2_000m)]);
+
+        await using var midway = CreateContext(_companyA);
+
+        var half = await midway.SupplierInvoices
+            .Include(i => i.Lines)
+            .Include(i => i.Allocations)
+            .FirstAsync(i => i.Id == invoiceId);
+
+        half.Status.Should().Be(SupplierInvoiceStatus.PartiallyPaid);
+        half.OutstandingAmount.Should().Be(3_000m);
+
+        await PayAsync(midway, amount: 3_000m, allocations: [new SupplierAllocationLine(invoiceId, 3_000m)]);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var settled = await fresh.SupplierInvoices
+            .Include(i => i.Lines)
+            .Include(i => i.Allocations)
+            .FirstAsync(i => i.Id == invoiceId);
+
+        settled.Status.Should().Be(SupplierInvoiceStatus.Paid);
+        (await fresh.Suppliers.FirstAsync(s => s.Id == _supplier)).Balance.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task An_invoice_cannot_be_paid_twice_over()
+    {
+        // Over-paying is refused against *that invoice*. The extra money is real and belongs on the
+        // account as an advance, not hidden inside a document that would then show as more than settled.
+        await using var db = CreateContext(_companyA);
+
+        var invoiceId = await RecordInvoiceAsync(db, total: 5_000m);
+
+        await PayAsync(db, amount: 5_000m, allocations: [new SupplierAllocationLine(invoiceId, 5_000m)]);
+
+        var act = async () => await PayAsync(
+            db,
+            amount: 5_000m,
+            allocations: [new SupplierAllocationLine(invoiceId, 5_000m)]);
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*outstanding*");
+    }
+
+    [Fact]
+    public async Task Money_paid_before_the_invoice_arrives_is_an_advance_not_an_error()
+    {
+        // A real state. It sits as an unallocated credit and takes the supplier's balance negative,
+        // which is exactly what "they owe us" looks like.
+        await using var db = CreateContext(_companyA);
+
+        var paymentId = await PayAsync(db, amount: 2_000m, allocations: []);
+
+        await using var fresh = CreateContext(_companyA);
+
+        var payment = await fresh.SupplierPayments
+            .Include(p => p.Allocations)
+            .FirstAsync(p => p.Id == paymentId);
+
+        payment.UnallocatedAmount.Should().Be(2_000m);
+
+        (await fresh.Suppliers.FirstAsync(s => s.Id == _supplier)).Balance.Should().Be(-2_000m);
+    }
+
+    [Fact]
+    public async Task A_payment_cannot_settle_another_suppliers_invoice()
+    {
+        // Both balances would be wrong and the error invisible: the invoice would look paid, and the
+        // right supplier would keep chasing.
+        await using var db = CreateContext(_companyA);
+
+        var other = new Supplier { CompanyId = _companyA, Code = "SUP-2", Name = "Dubai Traders" };
+        db.Suppliers.Add(other);
+        await db.SaveChangesAsync();
+
+        var invoiceId = await RecordInvoiceAsync(db, total: 1_000m);
+
+        var handler = new PaySupplierCommandHandler(db, Numbers(db), new StubClock());
+
+        var act = async () => await handler.Handle(
+            new PaySupplierCommand(
+                SupplierId: other.Id,
+                BranchId: _branchOfA,
+                PaymentMethodId: _bankTransfer,
+                Amount: 1_000m,
+                Allocations: [new SupplierAllocationLine(invoiceId, 1_000m)],
+                Reference: "TRF-1"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*different supplier*");
+    }
+
     // --- Fixture --------------------------------------------------------------------------------
 
     private static string[] Serials(int count) =>
         Enumerable.Range(1, count).Select(i => $"SN-{i:D3}").ToArray();
+
+    private async Task<Guid> CreateOrderAsync(
+        ApplicationDbContext db,
+        params (Guid ProductId, decimal Quantity, decimal UnitPrice)[] lines)
+    {
+        var handler = new CreatePurchaseOrderCommandHandler(db, Numbers(db), new StubClock());
+
+        return await handler.Handle(
+            new CreatePurchaseOrderCommand(
+                SupplierId: _supplier,
+                BranchId: _branchOfA,
+                WarehouseId: _warehouseOfA,
+                Lines: lines
+                    .Select(l => new PurchaseOrderLineInput(l.ProductId, l.Quantity, l.UnitPrice))
+                    .ToList()),
+            CancellationToken.None);
+    }
+
+    private async Task ApproveOrderAsync(ApplicationDbContext db, Guid orderId)
+    {
+        var handler = new ApprovePurchaseOrderCommandHandler(db, new StubUser(), new StubClock());
+
+        await handler.Handle(new ApprovePurchaseOrderCommand(orderId), CancellationToken.None);
+    }
+
+    /// <summary>Receives the order's only line, in full unless a smaller quantity is asked for.</summary>
+    private async Task<Guid> ReceiveAgainstOrderAsync(
+        ApplicationDbContext db,
+        Guid orderId,
+        decimal? quantity = null)
+    {
+        var order = await db.PurchaseOrders
+            .AsNoTracking()
+            .Include(o => o.Lines)
+            .FirstAsync(o => o.Id == orderId);
+
+        var line = order.Lines.Single();
+
+        var handler = new ReceiveGoodsCommandHandler(db, Ledger(db), Numbers(db), new StubClock());
+
+        return await handler.Handle(
+            new ReceiveGoodsCommand(
+                SupplierId: _supplier,
+                BranchId: _branchOfA,
+                WarehouseId: _warehouseOfA,
+                Lines:
+                [
+                    new ReceiveLine(
+                        line.ProductId,
+                        quantity ?? line.Quantity,
+                        line.UnitPrice,
+                        PurchaseOrderLineId: line.Id)
+                ],
+                PurchaseOrderId: orderId),
+            CancellationToken.None);
+    }
+
+    private async Task<Guid> RecordInvoiceAsync(
+        ApplicationDbContext db,
+        decimal total,
+        string currency = "AED",
+        decimal rate = 1m,
+        bool post = true,
+        string reference = "SUP-INV-1")
+    {
+        var handler = new RecordSupplierInvoiceCommandHandler(db, Numbers(db), new StubClock());
+
+        return await handler.Handle(
+            new RecordSupplierInvoiceCommand(
+                SupplierId: _supplier,
+                BranchId: _branchOfA,
+                SupplierReference: reference,
+                Lines: [new SupplierInvoiceLineInput("Goods as delivered", Quantity: 1, UnitPrice: total)],
+                CurrencyCode: currency,
+                ExchangeRate: rate,
+                Post: post),
+            CancellationToken.None);
+    }
+
+    private async Task<Guid> PayAsync(
+        ApplicationDbContext db,
+        decimal amount,
+        IReadOnlyCollection<SupplierAllocationLine> allocations,
+        string currency = "AED",
+        decimal rate = 1m)
+    {
+        var handler = new PaySupplierCommandHandler(db, Numbers(db), new StubClock());
+
+        return await handler.Handle(
+            new PaySupplierCommand(
+                SupplierId: _supplier,
+                BranchId: _branchOfA,
+                PaymentMethodId: _bankTransfer,
+                Amount: amount,
+                Allocations: allocations,
+                CurrencyCode: currency,
+                ExchangeRate: rate,
+                Reference: "TRF-9001"),
+            CancellationToken.None);
+    }
 
     private Task<Guid> ReceiveAsync(
         ApplicationDbContext db,

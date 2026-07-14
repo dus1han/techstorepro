@@ -8,7 +8,7 @@ import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import { useApiQuery } from "@/lib/use-api";
 import { issueCreditNote } from "@/features/sales/api";
-import { Money, StatusBadge } from "@/features/sales/components/money";
+import { Money, StatusBadge } from "@/components/ui/money";
 import {
   REFUND_LABELS,
   RefundMethod,

@@ -187,12 +187,14 @@ public class ReceiveGoodsCommandHandler : IRequestHandler<ReceiveGoodsCommand, G
             }
 
             // Tick the order off, if there was one.
-            if (line.PurchaseOrderLineId is { } orderLineId && order is not null)
+            if (ResolveOrderLine(order, line) is { } orderLine)
             {
-                var orderLine = order.Lines.FirstOrDefault(l => l.Id == orderLineId)
-                    ?? throw new NotFoundException("Purchase order line", orderLineId);
-
                 orderLine.ReceivedQuantity += line.Quantity;
+
+                // Keep the link on the document too. Without it the receipt could not say which line of
+                // the order it fulfilled, and the next receipt against the same order would have to
+                // guess all over again.
+                documentLine.PurchaseOrderLineId = orderLine.Id;
             }
         }
 
@@ -210,6 +212,47 @@ public class ReceiveGoodsCommandHandler : IRequestHandler<ReceiveGoodsCommand, G
         await transaction.CommitAsync(cancellationToken);
 
         return receipt.Id;
+    }
+
+    /// <summary>
+    /// Which line of the order this receipt line fulfils, if any.
+    ///
+    /// <b>The caller does not have to name it.</b> It used to have to, and the failure was silent and
+    /// expensive: a receipt that named the order but not its lines posted the stock, captured the
+    /// serials, and left the order sitting at <c>Approved</c> for ever — fully delivered, still showing
+    /// as outstanding, and chased. Nothing errored, so nobody found out until someone asked why the
+    /// supplier kept sending goods that had already arrived.
+    ///
+    /// So an unnamed line is matched on its product instead. That is unambiguous for the order this
+    /// system raises — one line per product — and where it is <em>not</em> unambiguous, the ambiguity is
+    /// reported rather than guessed at: crediting the wrong line would leave one half of the order
+    /// permanently over-received and the other half permanently open.
+    /// </summary>
+    private static PurchaseOrderLine? ResolveOrderLine(PurchaseOrder? order, ReceiveLine line)
+    {
+        if (order is null)
+        {
+            return null;   // A direct purchase. There is no order to tick off.
+        }
+
+        if (line.PurchaseOrderLineId is { } explicitId)
+        {
+            return order.Lines.FirstOrDefault(l => l.Id == explicitId)
+                ?? throw new NotFoundException("Purchase order line", explicitId);
+        }
+
+        var candidates = order.Lines.Where(l => l.ProductId == line.ProductId).ToList();
+
+        if (candidates.Count > 1)
+        {
+            throw new DomainException(
+                $"This order has {candidates.Count} lines for the same product, so it cannot be told "
+                + "which one these goods fulfil. Name the purchase order line explicitly.");
+        }
+
+        // None is legitimate: goods can arrive that were never on the order. They are received — the box
+        // is real and it is standing in the doorway — they simply tick nothing off.
+        return candidates.SingleOrDefault();
     }
 
     private async Task<PurchaseOrder?> LoadOrderAsync(

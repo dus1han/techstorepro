@@ -9,7 +9,7 @@ import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import { useApiQuery } from "@/lib/use-api";
 import { acceptQuotation, convertQuotation, createQuotation } from "@/features/sales/api";
-import { Money, StatusBadge } from "@/features/sales/components/money";
+import { Money, StatusBadge } from "@/components/ui/money";
 import { QUOTATION_STATUS_LABELS, QuotationStatus, type Quotation } from "@/features/sales/types";
 import type { PagedResult } from "@/types/api";
 import type { Customer, Product } from "@/types/catalog";

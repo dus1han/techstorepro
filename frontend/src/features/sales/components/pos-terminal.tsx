@@ -7,7 +7,7 @@ import { useAuth } from "@/lib/auth-context";
 import { useApiQuery } from "@/lib/use-api";
 import { sellAtCounter, type TenderInput } from "@/features/sales/api";
 import { lineNet, lineTax, round } from "@/features/sales/money-preview";
-import { Money } from "@/features/sales/components/money";
+import { Money } from "@/components/ui/money";
 import type { CounterSaleResult, PaymentMethod } from "@/features/sales/types";
 import type { PagedResult } from "@/types/api";
 import { TrackingMode, type Customer, type Product, type TaxRateDto } from "@/types/catalog";

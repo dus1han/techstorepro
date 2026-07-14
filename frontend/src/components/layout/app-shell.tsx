@@ -47,6 +47,18 @@ const NAV: { section: string; items: NavItem[] }[] = [
     ],
   },
   {
+    section: "Purchasing",
+    items: [
+      // Receipts first: it is the screen that actually moves stock, and the one the shop opens when a
+      // box is standing in the doorway. The order is optional (§25) and often does not exist at all.
+      { href: "/purchasing/receipts", label: "Goods receipts", feature: FEATURES.goodsReceipts },
+      { href: "/purchasing/orders", label: "Purchase orders", feature: FEATURES.purchaseOrders },
+      { href: "/purchasing/invoices", label: "Supplier invoices", feature: FEATURES.supplierInvoices },
+      { href: "/purchasing/payments", label: "Supplier payments", feature: FEATURES.supplierPayments },
+      { href: "/purchasing/imports", label: "Imports & landed cost", feature: FEATURES.importShipments },
+    ],
+  },
+  {
     section: "Inventory",
     items: [
       { href: "/inventory/stock", label: "Stock on hand", feature: FEATURES.stock },

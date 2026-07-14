@@ -1,8 +1,12 @@
 /**
- * Money and status, rendered the same way everywhere in sales.
+ * Money and status, rendered the same way everywhere in the product.
  *
  * Totals are tabular-nums and right-aligned without exception: a column of figures that does not line
- * up is a column nobody can scan, and this is the module where people scan columns of figures.
+ * up is a column nobody can scan, and these are the modules where people scan columns of figures.
+ *
+ * This lived in `features/sales` until purchasing needed it too. It is shared UI rather than a sales
+ * export because a feature module importing another feature module's components is how two modules
+ * quietly become one — and P6 (repairs) and P7 (finance) will both want it.
  */
 
 export function Money({ amount, currency = "AED" }: { amount: number; currency?: string }) {
