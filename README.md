@@ -2,17 +2,18 @@
 
 Multi-company SaaS ERP for a computer **sales**, **import** and **repair** business.
 
-**Phases P0, P1 and P2 are complete.** You can register a company, sign in, switch between companies,
-manage branches and warehouses, invite users and grant them permissions feature by feature, change
-business rules from Settings, and see every change in an audit trail — and you can now keep a full
-catalogue: products (serial-tracked or not), customers, suppliers, tax rates, price tiers and lists,
-discounts, payment methods and FX rates.
+**Phases P0–P4 are complete, and P5's backend is done.** A company is onboarded by TechStorePro; its
+staff sign in as `username@COMPANY`, hold permissions granted feature by feature, and leave an audit
+trail behind every change. The shop keeps a full catalogue, prices it properly (a wholesale customer and
+a walk-in are quoted different prices, and the system reports which price list it used), holds stock in a
+locked ledger, buys goods with landed cost — **and now sells them.**
 
-Pricing resolves properly: a wholesale customer and a walk-in are quoted different prices for the
-same product, and the system reports which price list it used.
+Quote → order → delivery → invoice → payment, plus a POS till, returns, credit notes and store credit.
+The delivery is the only sales document that moves stock, and it is where the serial binds: that is what
+will let a warranty claim in P6 find the invoice line that sold a given laptop, two years from now.
 
-The remaining modules — inventory, purchasing, sales, repairs, finance — are sequenced in
-[docs/development-plan.md](docs/development-plan.md). **P3 (inventory) is next.**
+The remaining work — the sales screens, repairs, finance, the SaaS platform — is sequenced in
+[docs/development-plan.md](docs/development-plan.md). **P5's screens are next**, then P6 (repairs).
 
 ## Stack
 

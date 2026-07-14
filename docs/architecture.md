@@ -393,45 +393,66 @@ by `apportion_basis`, written into `goods_receipt_lines.landed_unit_cost`, and *
 `unit_cost` on the resulting `stock_movement`. Inventory holds landed cost, not invoice cost.
 **Basis is unanswered** — see §7 question Q2.
 
-### 3.8 Sales
+### 3.8 Sales — **as built (P5)**
 
 ```
-  quotes                    id, company_id, branch_id, customer_id, number, status,
-                            valid_until, currency_code, subtotal, tax_total, total
-  quote_lines               id, quote_id, product_id, quantity, unit_price, discount,
-                            tax_percent_snapshot
-  sales_orders              id, company_id, branch_id, customer_id, quote_id (null), number,
-                            status, currency_code, fx_rate, subtotal, tax_total, total
-  sales_order_lines         id, sales_order_id, product_id, quantity, unit_price,
-                            discount, tax_percent_snapshot
-  deliveries                id, company_id, sales_order_id, warehouse_id ⚠, number, delivered_at
-  delivery_lines            id, delivery_id, product_id, serial_id (null), quantity
-  invoices                  id, company_id, branch_id, customer_id, sales_order_id (null),
-                            number, issued_at, due_date, currency_code, fx_rate,
-                            subtotal, tax_total, total, paid_amount, status
-  invoice_lines             id, invoice_id, product_id, serial_id (null), quantity, unit_price,
-                            discount, tax_percent_snapshot, tax_amount, line_total, unit_cost
-★ payments             ⚠    id, company_id, customer_id, number, amount, currency_code,
-                            paid_at, remarks     -- header; NO single invoice_id (§23)
-★ payment_lines        ⚠    id, payment_id, payment_method_id, amount, reference
-                            -- §23 "multiple payment methods" on one sale
-★ payment_allocations  ⚠    id, payment_id, invoice_id, amount
-                            -- one payment across several invoices; partial payment
-  credit_notes              id, company_id, customer_id, invoice_id (null), number, issued_at,
-                            reason, subtotal, tax_total, total, ★ settlement_type
-  credit_note_lines         id, credit_note_id, invoice_line_id (null), product_id,
-                            serial_id (null), quantity, unit_price, tax_percent_snapshot
-★ customer_credit_ledger    id, company_id, customer_id, entry_type (issued|consumed|refunded),
-                            amount, reference_type, reference_id, at   -- §24 store credit
-★ returns                   id, company_id, customer_id, invoice_id, number, received_at,
-                            resolution (exchange|store_credit|credit_note|cash_refund|bank_refund)
-★ return_lines              id, return_id, invoice_line_id, product_id, serial_id (null),
-                            quantity, condition, restock (bool)
+  quotations                id, company_id, branch_id, customer_id (null), number, status,
+                            quoted_at, valid_until, currency_code
+  quotation_lines           id, quotation_id, product_id, quantity, unit_price,
+                            discount_percent, discount_amount, tax_percent, price_source
+  sales_orders              id, company_id, branch_id, customer_id, warehouse_id,
+                            quotation_id (null), number, status, ordered_at, currency_code
+  sales_order_lines         id, sales_order_id, product_id, quantity, delivered_quantity,
+                            unit_price, discount_percent, discount_amount, tax_percent,
+                            price_source, stock_reservation_id (null)
+  deliveries                id, company_id, branch_id, customer_id, warehouse_id,
+                            sales_order_id (null), number, status, delivered_at
+  delivery_lines            id, delivery_id, sales_order_line_id (null), product_id,
+                            quantity, unit_cost          -- unit_cost = COGS, from the ledger
+  delivery_serials          id, delivery_line_id, serial_id, serial_number
+  sales_invoices            id, company_id, branch_id, customer_id, sales_order_id (null),
+                            delivery_id (null), number, status, invoiced_at, due_at,
+                            currency_code
+  sales_invoice_lines       id, sales_invoice_id, delivery_line_id (null), product_id (null),
+                            quantity, unit_price, discount_percent, discount_amount,
+                            tax_percent, unit_cost, price_source, discount_approved_by (null)
+  customer_payments         id, company_id, branch_id, customer_id, number, paid_at,
+                            currency_code, reference     -- header; NO invoice_id, NO amount
+  customer_payment_methods  id, customer_payment_id, payment_method_id, amount, reference
+  customer_payment_allocations  id, customer_payment_id, sales_invoice_id, amount
+  credit_notes              id, company_id, branch_id, customer_id, sales_invoice_id,
+                            warehouse_id (null), number, status, refund_method, issued_at,
+                            reason, currency_code
+  credit_note_lines         id, credit_note_id, sales_invoice_line_id, product_id (null),
+                            quantity, unit_price, discount_percent, discount_amount,
+                            tax_percent, unit_cost, restocked_to_shelf
+  store_credit_entries      id, company_id, customer_id, credit_note_id (null),
+                            customer_payment_id (null), amount (signed), occurred_at, reason
 ```
 
-**⚠ The payments redesign is forced by §23.** The current `payments.invoice_id` cannot express
-"one sale settled by cash + card", nor "one payment against three invoices". Header + method lines +
-allocations is the standard shape and it is not optional.
+**Where this departs from the sketch above it, and why.**
+
+- **`sales_invoices`, not `invoices`.** P4 already has `supplier_invoices`, and a bare `invoices` beside
+  it is ambiguous about which direction the money points.
+- **No `fx_rate`, and no `subtotal`/`tax_total`/`total` columns.** Sales are in the base currency (D8), so
+  there is no rate to hold. The money is **computed** from the lines by `SalesMath`, never stored: a
+  stored total that could disagree with its lines is a document nobody can trust, and the totals are
+  cheap to derive. Likewise **`customer_payments` has no `amount`** — the total is the sum of its tender,
+  because a header amount that could disagree with the till is worse than no header amount.
+- **`delivery_serials` is a table, not a `serial_id` on the line.** One line ships five laptops, and each
+  is a distinct machine. A column could hold one of them.
+- **No `returns` table.** A return *is* a credit note — modelling both would mean two documents that
+  could disagree about what came back. `credit_note_lines.restocked_to_shelf` carries the "condition"
+  distinction the sketch wanted: faulty goods are refunded without being put back on sale.
+- **`store_credit_entries` is a signed ledger** rather than an `entry_type` enum. The balance is a `SUM`,
+  which cannot be got wrong by adding the wrong pair of buckets.
+
+**The payments redesign was forced by §23, and it is what was built.** A single `payments.invoice_id`
+cannot express "one sale settled by cash + card", nor "one payment against three invoices". Header +
+method lines + allocations is the standard shape, and it was not optional.
+
+**Stock:** `deliveries` is the only table here whose creation moves stock, and it does it through
+`IStockLedger` like everything else (§4.5). `credit_notes` is the only one that moves it back.
 
 ### 3.9 Repairs
 
@@ -746,9 +767,9 @@ company B's ids, must get a 404 from every endpoint added in that phase.
 | **P0** ✅ | Foundation: layering, tenancy, error contract, health, Docker | — |
 | **P1** ✅ | **Identity, tenancy, permissions, settings, audit.** Company registration, branches, **warehouses** (owned + shared), users, the per-user (feature × action) permission engine, JWT + refresh + login history + lockout, the effective-dated Settings engine, document numbering, audit trail, soft delete + restore. **Done** — 16 domain tests + 6 cross-tenant isolation tests (Testcontainers) green; auth, permissions, audit, soft delete and settings verified against a running API. | — |
 | **P2** ✅ | **Master data.** Products, categories, brands, customers, suppliers, tax rates, price tiers/lists, discounts, payment methods, currencies, FX. **Done** — 14 tables, an `IPriceResolver` that reports *why* a customer pays what they pay, `<DataTable>` + `<EntityForm>` primitives, TanStack Query adopted. 47 tests green. | — |
-| **P3** | **Inventory — the spine.** Stock ledger, warehouses, balances, serial lifecycle, barcodes/QR + label printing, reservations, transfers, adjustments, stock counts, historical stock, **weighted-average costing**. ← **next** | ✅ clear |
-| **P4** | **Purchasing & imports.** PO (optional), GRN with serial capture, supplier invoices/payments, import shipments, **landed cost**, FX. | **Q2 (landed-cost basis)** |
-| **P5** | **Sales.** POS, quotes → orders → delivery (serial picking) → invoice, multi-method payments, returns, credit notes, store credit, discount approval. | **Q6 (tax), Q8 (FX sales)** |
+| **P3** ✅ | **Inventory — the spine.** Stock ledger (`IStockLedger` is the single door; every method requires an ambient transaction), balances locked and costed under that lock, serial lifecycle as a state machine, barcodes/QR + label printing, reservations, transfers, adjustments, stock counts, historical stock, **weighted-average costing**. The balance audit recomputes the cache from the ledger and runs nightly. **Done** — 142 tests. | ✅ clear |
+| **P4** ✅ | **Purchasing & imports.** PO (optional), GRN with serial capture, supplier invoices/payments, import shipments, **landed cost by value (D6)**, FX gain/loss on settlement. Goods and their cost do not arrive together, so charges fold in afterwards via a `Revaluation` movement. **Done** — 231 tests. | **Q2** ✅ answered (D6) |
+| **P5** | **Sales.** POS, quotes → orders → delivery (serial picking) → invoice, multi-method payments, returns, credit notes, store credit, discount approval. **Backend done** — 17 tables, 312 tests; the delivery is the only sales document that moves stock, and it binds the serial. **Screens outstanding.** | **Q6, Q8** ✅ answered (D7, D8) |
 | **P6** | **Repairs.** Intake, diagnosis, approval, parts (consumes P3 stock), labour, outsourced repair, warranty linked to the P5 sale, invoicing, profitability. | P3 + P5 |
 | **P7** | **Finance, reporting, dashboard.** AR/AP ageing, statements, cash/bank, expenses, computed P&L, the §35 report set, §36 dashboard, §37 global search. | ✅ clear |
 | **P8** | **SaaS platform.** Plans, subscriptions, entitlement enforcement, billing, invoices, platform admin console, onboarding. | **Q7 (payment gateway)** |
@@ -799,9 +820,9 @@ in the repo; docs updated in the same PR.
 | # | Question | Blocks | Why it is expensive to defer |
 | --- | --- | --- | --- |
 | **Q2** | **Landed-cost apportionment basis: by value, by weight, or by quantity?** (§26 says "calculate landed cost", never how) | **P4** | Misapplied landed cost silently misprices every sale that follows — and with weighted-average costing now decided, it feeds straight into the moving average, so an error propagates to *all* stock of that product, not just the imported units. Needs worked examples from the business, turned into tests, *before* the code. |
-| **Q6** | **Tax model.** One VAT rate or many? Prices tax-inclusive or tax-exclusive? Which jurisdiction (api-design's example uses **AED** — is this UAE)? Is a **tax e-invoicing integration** (FTA / ZATCA / equivalent) required? | **P5** | Tax-inclusive vs exclusive changes every price field and every line calculation. E-invoicing is a certification project, not a feature. |
+| ~~**Q6**~~ | ~~**Tax model.**~~ **Answered — §45 D7.** Tax-**exclusive**; tax is charged on the discounted net. **No jurisdiction is hardcoded**: each company configures its own effective-dated rates and a default, and one with no sales tax configures none. Every line **snapshots** the percentage. No e-invoicing in P5. | ✅ | The rule lives in exactly one place (`SalesMath`), so a quote and an invoice for the same lines cannot total differently. |
 | **Q7** | **SaaS billing: which payment processor** (Stripe? local gateway? manual bank transfer?), and is signup **self-service with a card**, or manual onboarding? §4 says "Billing / Payments" but names no processor. | **P8** | Determines whether P8 is a two-week module or a PCI-scoped integration. |
-| **Q8** | **Multi-currency sales.** §26 covers foreign-currency *purchases*. §23 says payments capture a currency. **Can a customer be invoiced in a foreign currency**, or is selling always in the company's base currency? | **P5** | FX gain/loss on receivables is a whole sub-module. |
+| ~~**Q8**~~ | ~~**Multi-currency sales.**~~ **Answered — §45 D8.** Sales are raised in the company's **base currency only**. The asymmetry with purchasing is deliberate: the shop genuinely owes dollars to an overseas supplier, but it does not have to bill in them. | ✅ | Enforced in one place (`CompanyCurrency`), so the day this changes, the compiler lists every document it protected. Unlike the tax basis, adding foreign-currency invoicing later does not restate past invoices. |
 | **Q9** | **Deployment target and file storage.** Cloud (Azure/AWS) or self-hosted? Where do §39 attachments and §28 repair photos live? Is there a data-residency constraint? §43 wants automated backups — of what, to where, with what RPO/RTO? | **P1** (storage), **P9** (backup) | `IFileStorage` abstracts the *code*, but the §4 storage limits and §43 backup guarantees need a real target. |
 
 ### 7.3 Smaller gaps worth confirming (not blocking)

@@ -1,6 +1,7 @@
 # Development plan
 
-> Status: **P0–P4 complete. CI is running. P5 (sales) is next but blocked on Q6 (tax model) and Q8 (foreign-currency invoicing).**
+> Status: **P0–P4 complete. P5 (sales) — backend complete, screens outstanding. Q6 and Q8 are answered
+> (§45 D7, D8). P6 (repairs) is next: it needs P5's serial-to-invoice-line binding, which is built.**
 >
 > Phases are numbered P0–P9 and match [architecture.md §6](architecture.md). The earlier M0–M8
 > milestone numbering is gone: it mapped almost one-to-one, and keeping two schemes alive only
@@ -195,16 +196,59 @@ to the parent's navigation collection; EF's fixup had already done the latter, s
 from the in-memory graph — including an adjustment's `NetValue`, the money written off — was **double**.
 The database was correct; the documents were not. Fixed, with a regression test.
 
-### P5 — Sales
+### P5 — Sales ✅ backend done (screens outstanding)
 
-POS, quotes → orders → deliveries (serial picking) → invoices, multi-method payments, returns,
-credit notes, store credit, discount approval.
+**Both blocking questions are answered** (§45 **D7**, **D8**): prices are **tax-exclusive** with
+per-company effective-dated rates and **no jurisdiction hardcoded**; sales are raised in the company's
+**base currency only**.
 
-- 🔴 **Blocked on Q6** (tax: inclusive or exclusive? which jurisdiction? e-invoicing required?) and
-  **Q8** (can a customer be invoiced in a foreign currency?).
-- Payments are header + method lines + allocations — one sale settled by cash *and* card, one payment
-  across three invoices. A single `invoice_id` on a payment cannot express either.
-- **Serial binding at delivery is what makes P6's warranty flow possible. Do not defer it.**
+**Delivered (17 new tables, 70 in total):**
+
+- **Quote → order → delivery → invoice.** A quotation reserves nothing (an offer is not a claim on the
+  shelf, and holding stock for every speculative quote would empty the warehouse on paper while it sat
+  full). **Confirming an order is what promises the stock** — one reservation per line, through the
+  ledger, under its lock. That, and nothing else, is "prevent overselling".
+- **The delivery is the only sales document that moves stock**, and it is where the serial binds. The
+  invoice can be raised before the goods go, after them, or cover three deliveries — but exactly one
+  document knows which machine went out of the door. **This is what makes P6's warranty claim answerable
+  two years later.** The invoice snapshots the COGS the ledger valued the issue at: recomputing it later
+  would restate the margin on every sale the shop has ever made, because the average keeps moving.
+- **The till (POS)** — one call, one transaction, three documents. A declined card leaves the laptop on
+  the shelf and no invoice chasing anybody. It composes the same handlers the documented flow uses, so
+  there is still exactly one path by which stock moves.
+- **Payments are header + tender + allocations.** One sale settled by cash *and* card; one transfer
+  across three invoices; one invoice in two instalments. There is **no `Amount` column** on the payment —
+  the total is the sum of the tender, because a header that could disagree with its method lines would be
+  a till that does not balance.
+- **Returns, credit notes, store credit.** A returned serial goes to `Returned`, **not** `InStock` — a
+  machine that came back is inspected before it is sold to someone else. Store credit is a **ledger**, so
+  "why do I have 240 credit?" has an answer.
+- **Discount approval is a permission, not a queue** (§32). There is a customer at the counter; a sale
+  that waited for a manager to log in would be a lost sale, and the shop would work around it by granting
+  everyone the permission. Who approved it is stamped on the line.
+- **`Idempotency-Key`** — the P4 debt, closed. The key is claimed by an INSERT *before* the work runs,
+  and a unique index makes the claim atomic.
+
+**The arithmetic that had to be got right, and the two places it was nearly got wrong:**
+
+1. **Tax comes after the discount.** `SalesMath` is the only place that rule exists. Tax the gross and
+   then discount, and every invoice the shop issues is wrong by the tax on the discount — a small number,
+   on every line, forever, and one the tax authority eventually asks about.
+2. **A refund is a negative payment, not just a negative invoice.** The credit note takes its total off
+   the customer's balance; the refund then pays that credit back *out*, which puts it back on. Net zero.
+   Only an offset against the balance actually moves it. Deduct on every method — the obvious
+   implementation — and a customer refunded 100 in cash walks out with the money *and* a 100 credit.
+
+**Tests: 231 → 312.** The end-to-end sale of a serial-tracked laptop is proven against a real Postgres:
+stock falls by one, the serial is `Sold` and bound to its invoice line, COGS equals the moving average,
+the customer owes 1,575 on a 1,500 sale, and **the P3 balance audit still reconciles** — which is what
+proves nothing in sales wrote stock outside the ledger. Also proven: the same serial cannot be sold
+twice, overselling is refused under the lock, a delivery cannot be billed twice, a declined card rolls
+back all three documents, store credit cannot be overspent, and a replayed `Idempotency-Key` posts one
+invoice rather than two.
+
+**Outstanding:** the sales screens. `frontend/src/features/` is still empty, and P5 is the module that
+creates it.
 
 ### P6 — Repairs
 
@@ -259,11 +303,12 @@ Recorded rather than hidden. Each has an owning phase; none is a reason to stop.
 | No rate limiting on `/auth/*` | Lockout blunts online brute force but not a distributed one. | **P9** |
 | Migrations applied by the API at start-up (Development) | Fine for one developer; two production instances starting together would race. | Before the first real deploy: a separate deploy step. |
 | Postgres RLS not enabled | The EF query filter is enforced centrally and proven by tests. RLS would stop even a raw SQL query that bypassed it. | Before production (database-design.md §1). |
-| **Frontend types still hand-written** | `types/*.ts` mirror the API by hand. A renamed API field compiles fine on the client and fails at runtime. **P3 added the `codegen` script** that generates them from `/openapi/v1.json`; the hand-written types are still what the app imports, so the drift is now *checkable* but not yet *impossible*. | **P4** — migrate the imports over, then delete the hand-written files. |
+| **Frontend types still hand-written** | `types/*.ts` mirror the API by hand. A renamed API field compiles fine on the client and fails at runtime. **P3 added the `codegen` script** that generates them from `/openapi/v1.json`; the hand-written types are still what the app imports, so the drift is now *checkable* but not yet *impossible*. Rolled from P4, which built no screens. | **P5's screens** — the sales module is the first to be written against generated types, and the older files migrate behind it. |
+| **P4 and P5 have no screens** | The purchasing and sales modules are reachable only through the API. The business logic is proven by tests, but a shop cannot yet receive a container or serve a customer without curl. | **P5 slice 4** (sales), then a purchasing pass. |
 | ~~Product delete does not check stock~~ | **Closed in P3.** Retiring a product now fails if it has stock on hand or live serials, and names the warehouses. | ✅ |
 | ~~Update/delete missing on some reference data~~ | **Closed in P3.** Brands, tax rates, price tiers, payment methods and discounts can now be edited and retired. A tax rate's **percent** is deliberately not editable — changing it in place would restate the tax on invoices already issued — so `POST /tax-rates/{id}/supersede` closes the old rate and opens its successor. | ✅ |
 | Migrations applied by the API at start-up (Development) | Two production instances starting together would race. The maintenance job is safe here (it only reads, and its writes are per-company and transactional), but the schema is not. | Before the first real deploy: a separate deploy step. |
-| No idempotency keys yet | `api-design.md §5` promises `Idempotency-Key` on state-changing endpoints. Nothing implements it. A double-clicked adjustment posts twice — and unlike a duplicate invoice, a duplicate write-off is invisible until the next count. | **P4**, with goods receipts. |
+| ~~No idempotency keys yet~~ | **Closed in P5.** `IdempotencyFilter` honours the header on every state-changing request: the key is claimed by an INSERT *before* the work runs, and a unique index makes the claim atomic, so two clicks 50ms apart cannot both sell the laptop. A retry replays the stored response; a failed request releases its key, because a mistyped payment that could never be re-sent would be a worse trap than the one being closed. | ✅ |
 | ~~Repository not under version control~~ | **Closed.** The repository is on `origin` (GitHub) and P3 is pushed. The CI workflow's seven gates were verified locally before the push, so the pipeline is green the day it first runs rather than a wall of red everyone learns to ignore. | ✅ |
 
 ## Engineering practices
@@ -316,11 +361,16 @@ service logs a warning at start-up saying exactly what stops happening if you do
 
 ## Immediate next steps
 
-1. **Answer Q2 (landed-cost basis)** with worked examples from the business — by value, by weight, or
-   by quantity? It blocks P4, and now that the ledger is real the stakes are concrete: the landed cost
-   is what `ApplyInbound` feeds into the moving average, so an error there does not just misprice the
-   imported units — it **spreads to all existing stock of that product** and never washes out.
-2. **Watch the first CI run.** All seven gates pass locally; the pipeline has never actually executed.
-3. **Start P4 — purchasing and imports**, once Q2 is answered. The GRN is what finally calls
-   `IStockLedger.PostAsync` with a real supplier cost; today the only things that move stock are
-   adjustments, transfers and counts.
+1. **Build the sales screens** (P5 slice 4). The backend can sell a serial-tracked laptop, take cash and
+   card for it, and take it back — but only through the API. `frontend/src/features/` is still empty, and
+   sales is the module that creates it: the shape it lands on is the shape P6 and P7 will copy.
+2. **Write the screens against generated types**, and migrate the hand-written `types/*.ts` behind them.
+   The `codegen` script has existed since P3 and nothing imports it yet.
+3. **Then P6 — repairs.** Both its dependencies are now real: parts come out of stock through the ledger
+   (P3), and a warranty claim can find the invoice line that sold a serial (P5's
+   `Serial.SoldInvoiceLineId`, which is set at last).
+
+## Open questions that still block a phase
+
+Only **Q7** (SaaS payment processor → P8) and **Q9** (deployment target and file storage → P9) remain.
+Neither blocks P6.

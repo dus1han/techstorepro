@@ -175,12 +175,25 @@ stock, taking a payment) accept an `Idempotency-Key` header. A repeated key retu
 original result instead of creating a second document — a counter clerk double-clicking must
 not invoice twice.
 
+**Built in P5** (`IdempotencyFilter`), and the order of operations is the whole of it:
+
+- the key is **claimed by an INSERT before the work runs**, and a unique index on `(company, key,
+  endpoint)` makes that claim atomic. Claiming it afterwards would leave the exact window this closes
+  wide open — two clicks 50ms apart would both find no record, and both would sell the laptop;
+- a repeat of a **finished** request replays its stored response, byte for byte, so the caller cannot
+  tell a retry from the original;
+- a repeat of a request **still in flight** is a `409`, not a second execution;
+- the same key with a **different body** is a `422` — that is not a retry, it is a caller bug, and
+  replaying the first answer would hide it;
+- a request that **fails releases its key**, so the caller can correct the input and try again with it.
+  A mistyped payment that could never be re-sent would be a worse trap than the one being closed.
+
 Updates to documents carry a `rowVersion`; a mismatch is a `409`, not a silent overwrite.
 
 ## 6. Endpoints
 
-Grouped by module, in build order. **P1–P3 are built** (identity, master data, inventory); everything
-from purchasing down is still planned.
+Grouped by module, in build order. **P1–P5 are built** (identity, master data, inventory, purchasing,
+sales); repairs, finance and the SaaS platform are still planned.
 
 ```
 # Master data — built (P2), reference-data edit/retire added in P3
@@ -243,7 +256,43 @@ POST   /api/v1/goods-receipts           receives goods AND posts them to stock, 
 GET    /api/v1/import-shipments         POST
 POST   /api/v1/import-shipments/{id}/charges     freight, insurance, customs, clearing — any currency
 POST   /api/v1/import-shipments/{id}/apportion   ?basis=ByValue   fold landed cost into inventory
+
+# Sales — built (P5). Prices are tax-exclusive (D7); everything is in the base currency (D8).
+GET    /api/v1/quotations               POST
+POST   /api/v1/quotations/{id}/send     /accept, /reject
+POST   /api/v1/quotations/{id}/convert  → a sales order, at the price that was quoted. It does not
+                                        re-resolve against today's list: that promise is the document.
+
+GET    /api/v1/sales-orders             POST
+POST   /api/v1/sales-orders/{id}/confirm   RESERVES the stock and checks the credit limit. This is the
+                                           moment the shop commits goods to someone who has not paid.
+POST   /api/v1/sales-orders/{id}/cancel    gives the reserved stock back to the shelf
+
+GET    /api/v1/deliveries               POST
+POST   /api/v1/deliveries               THE ONLY THING IN SALES THAT MOVES STOCK. Binds the serial to
+                                        the machine that left. salesOrderId is nullable — the counter
+                                        sale is a first-class flow, exactly as the PO-less GRN is.
+
+GET    /api/v1/sales-invoices           GET /{id}
+POST   /api/v1/sales-invoices           prices the delivered lines, snapshots tax and COGS, raises the
+                                        customer's balance. It moves NO stock — the delivery did.
+POST   /api/v1/sales-invoices/{id}/cancel  unpaid only; does NOT return stock (that is a credit note)
+
+GET    /api/v1/customer-payments        POST   header + tender lines + allocations.
+                                        Cash AND card on one sale; one payment across three invoices.
+                                        Unallocated money is a credit, not an error.
+
+POST   /api/v1/pos/sales                the till: goods out, bill raised, money taken — ONE transaction.
+                                        A declined card leaves the laptop on the shelf.
+
+GET    /api/v1/credit-notes             POST   the only thing that puts stock back.
+                                        Returned serials go to `Returned`, never straight to `InStock`.
+GET    /api/v1/credit-notes/store-credit/{customerId}   a ledger, so the balance can explain itself
 ```
+
+**Send an `Idempotency-Key` on `/pos/sales` and `/customer-payments`.** A double-clicked till would
+otherwise take the money twice, and unlike a duplicate invoice nobody notices until they count the
+drawer. See §5 — the key is claimed *before* the work runs.
 
 ### The import flow, and why it is shaped like this
 
