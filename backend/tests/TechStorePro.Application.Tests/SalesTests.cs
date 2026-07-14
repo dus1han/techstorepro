@@ -6,6 +6,8 @@ using TechStorePro.Application.Sales.Orders;
 using TechStorePro.Application.Sales.Payments;
 using TechStorePro.Application.Sales.Pos;
 using TechStorePro.Application.Sales.Quotations;
+using TechStorePro.Application.Sales.Returns;
+using TechStorePro.Application.Sales.Services;
 using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Exceptions;
@@ -53,6 +55,7 @@ public class SalesTests : IAsyncLifetime
 
     private Guid _cash;
     private Guid _card;          // requires a reference — a card slip that cannot be reconciled is useless
+    private Guid _storeCredit;   // tender, not a discount: the shop has already had this money
 
     public async Task InitializeAsync()
     {
@@ -151,7 +154,15 @@ public class SalesTests : IAsyncLifetime
             ValidFrom = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
         };
 
-        seed.PaymentMethods.AddRange(cash, card);
+        var storeCredit = new PaymentMethod
+        {
+            CompanyId = company.Id,
+            Name = "Store credit",
+            Kind = PaymentMethodKind.StoreCredit,
+            ValidFrom = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+        };
+
+        seed.PaymentMethods.AddRange(cash, card, storeCredit);
 
         foreach (var (type, prefix) in new[]
                  {
@@ -159,7 +170,8 @@ public class SalesTests : IAsyncLifetime
                      (DocumentType.SalesOrder, "SO"),
                      (DocumentType.DeliveryNote, "DLV"),
                      (DocumentType.Invoice, "INV"),
-                     (DocumentType.Payment, "PAY")
+                     (DocumentType.Payment, "PAY"),
+                     (DocumentType.CreditNote, "CN")
                  })
         {
             seed.DocumentNumberSequences.Add(new DocumentNumberSequence
@@ -186,6 +198,7 @@ public class SalesTests : IAsyncLifetime
         _cable = cable.Id;
         _cash = cash.Id;
         _card = card.Id;
+        _storeCredit = storeCredit.Id;
     }
 
     public Task DisposeAsync() => _postgres.DisposeAsync().AsTask();
@@ -863,7 +876,352 @@ public class SalesTests : IAsyncLifetime
         line.TaxAmount.Should().Be(3.60m);
     }
 
+    // --- Returns and credit notes (requirements §24) -------------------------------------------------
+
+    [Fact]
+    public async Task A_returned_laptop_comes_back_but_not_onto_the_shelf()
+    {
+        // The serial goes to Returned, not InStock. A machine that came back is inspected before it is
+        // sold to somebody else — and quantities alone cannot express "here, but not fit to sell", which
+        // is exactly why serials exist.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _laptop, 1, 1_200m, ["SN-A"]);
+
+        var deliveryId = await DeliverDirectAsync(db, _customer, (_laptop, 1m, new[] { "SN-A" }));
+        var invoiceId = await InvoiceAsync(db, deliveryId);
+        await PayAsync(db, _customer, [new TenderLine(_cash, 1_575m)], [new AllocationLine(invoiceId, 1_575m)]);
+
+        var invoiceLine = await db.SalesInvoiceLines.FirstAsync(l => l.SalesInvoiceId == invoiceId);
+
+        await CreditAsync(
+            db,
+            invoiceId,
+            RefundMethod.CashRefund,
+            new ReturnLine(invoiceLine.Id, 1m, SerialNumbers: ["SN-A"]));
+
+        await using var fresh = CreateContext(_companyA);
+
+        // The stock is back — at the cost it left at, not at today's average.
+        var balance = await fresh.StockBalances.SingleAsync(b => b.ProductId == _laptop);
+        balance.Quantity.Should().Be(1m);
+        balance.AverageCost.Should().Be(1_200m);
+
+        var serial = await fresh.Serials.FirstAsync(s => s.SerialNumber == "SN-A");
+        serial.Status.Should().Be(SerialStatus.Returned, "not InStock — it has not been inspected yet");
+
+        // Cash went back, so the customer neither owes nor is owed.
+        (await fresh.Customers.FirstAsync(c => c.Id == _customer)).Balance
+            .Should().Be(0m, "they paid 1,575 and were refunded 1,575");
+
+        // And the ledger still proves itself after stock came back in.
+        (await new BalanceAuditor(fresh).AuditAsync()).Agrees.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Cash_cannot_be_refunded_for_an_invoice_that_was_never_paid()
+    {
+        // It would hand the customer the shop's own money — and they would still owe for the goods they
+        // kept. Offsetting against the balance is the right answer, and the error says so.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var invoiceId = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 1m, null)));
+        var line = await db.SalesInvoiceLines.FirstAsync(l => l.SalesInvoiceId == invoiceId);
+
+        var act = async () => await CreditAsync(db, invoiceId, RefundMethod.CashRefund, new ReturnLine(line.Id, 1m));
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*never arrived*");
+    }
+
+    [Fact]
+    public async Task Crediting_an_unpaid_invoice_simply_reduces_what_the_customer_owes()
+    {
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var invoiceId = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 2m, null)));  // 168
+        var line = await db.SalesInvoiceLines.FirstAsync(l => l.SalesInvoiceId == invoiceId);
+
+        await CreditAsync(db, invoiceId, RefundMethod.OffsetAgainstBalance, new ReturnLine(line.Id, 1m));  // 84 back
+
+        await using var fresh = CreateContext(_companyA);
+
+        (await fresh.Customers.FirstAsync(c => c.Id == _customer)).Balance
+            .Should().Be(84m, "they owed 168 and gave one of the two cables back");
+
+        (await fresh.StockBalances.SingleAsync(b => b.ProductId == _cable)).Quantity.Should().Be(9m);
+    }
+
+    [Fact]
+    public async Task A_refund_taken_as_store_credit_is_a_ledger_entry_and_not_a_balance()
+    {
+        // "Why do I have 84 credit?" has an answer only if every issue is a row.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var invoiceId = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 1m, null)));
+        await PayAsync(db, _customer, [new TenderLine(_cash, 84m)], [new AllocationLine(invoiceId, 84m)]);
+
+        var line = await db.SalesInvoiceLines.FirstAsync(l => l.SalesInvoiceId == invoiceId);
+
+        await CreditAsync(db, invoiceId, RefundMethod.StoreCredit, new ReturnLine(line.Id, 1m));
+
+        await using var fresh = CreateContext(_companyA);
+
+        var entries = await fresh.StoreCreditEntries.Where(e => e.CustomerId == _customer).ToListAsync();
+
+        entries.Should().ContainSingle();
+        entries.Sum(e => e.Amount).Should().Be(84m);
+        entries.Single().Reason.Should().Contain("CN-");
+
+        // The credit lives in its own ledger. It must NOT also sit on the balance, or the shop would owe
+        // the customer twice — once as a negative balance and once as credit.
+        (await fresh.Customers.FirstAsync(c => c.Id == _customer)).Balance
+            .Should().Be(0m, "the credit is in the store-credit ledger, not double-counted on the balance");
+    }
+
+    [Fact]
+    public async Task Store_credit_can_be_spent_and_cannot_be_overspent()
+    {
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        // Buy one, pay for it, bring it back for store credit → 84 of credit.
+        var firstInvoice = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 1m, null)));
+        await PayAsync(db, _customer, [new TenderLine(_cash, 84m)], [new AllocationLine(firstInvoice, 84m)]);
+
+        var firstLine = await db.SalesInvoiceLines.FirstAsync(l => l.SalesInvoiceId == firstInvoice);
+        await CreditAsync(db, firstInvoice, RefundMethod.StoreCredit, new ReturnLine(firstLine.Id, 1m));
+
+        // Now buy two (168) and try to pay entirely from 84 of credit.
+        var secondInvoice = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 2m, null)));
+
+        var tooMuch = async () => await PayAsync(
+            db,
+            _customer,
+            [new TenderLine(_storeCredit, 168m)],
+            [new AllocationLine(secondInvoice, 168m)]);
+
+        await tooMuch.Should().ThrowAsync<DomainException>().WithMessage("*holds 84*");
+
+        // Spend the 84 that is really there, and pay the rest in cash.
+        await PayAsync(
+            db,
+            _customer,
+            [new TenderLine(_storeCredit, 84m), new TenderLine(_cash, 84m)],
+            [new AllocationLine(secondInvoice, 168m)]);
+
+        await using var fresh = CreateContext(_companyA);
+
+        (await fresh.StoreCreditEntries.Where(e => e.CustomerId == _customer).SumAsync(e => e.Amount))
+            .Should().Be(0m, "the credit was issued and then spent — the ledger nets to nothing");
+
+        var invoice = await fresh.SalesInvoices
+            .Include(i => i.Lines).Include(i => i.Allocations)
+            .FirstAsync(i => i.Id == secondInvoice);
+
+        invoice.Status.Should().Be(SalesInvoiceStatus.Paid);
+    }
+
+    [Fact]
+    public async Task A_serial_cannot_be_returned_against_an_invoice_that_did_not_sell_it()
+    {
+        // Otherwise a customer could return a machine bought elsewhere and be refunded this invoice's
+        // price for it.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _laptop, 2, 1_200m, ["SN-A", "SN-B"]);
+
+        var invoiceA = await InvoiceAsync(
+            db,
+            await DeliverDirectAsync(db, _customer, (_laptop, 1m, new[] { "SN-A" })));
+
+        await InvoiceAsync(db, await DeliverDirectAsync(db, _walkIn, (_laptop, 1m, new[] { "SN-B" })));
+
+        var lineA = await db.SalesInvoiceLines.FirstAsync(l => l.SalesInvoiceId == invoiceA);
+
+        // SN-B belongs to the walk-in's invoice, not this one.
+        var act = async () => await CreditAsync(
+            db,
+            invoiceA,
+            RefundMethod.OffsetAgainstBalance,
+            new ReturnLine(lineA.Id, 1m, SerialNumbers: ["SN-B"]));
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*not sold on this invoice line*");
+    }
+
+    [Fact]
+    public async Task More_cannot_be_credited_than_was_sold()
+    {
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var invoiceId = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 2m, null)));
+        var line = await db.SalesInvoiceLines.FirstAsync(l => l.SalesInvoiceId == invoiceId);
+
+        await CreditAsync(db, invoiceId, RefundMethod.OffsetAgainstBalance, new ReturnLine(line.Id, 1m));
+
+        // One already came back. Asking for two more would refund three of the two that were sold — and,
+        // because it restocks, conjure a cable out of a refund.
+        var act = async () => await CreditAsync(
+            db, invoiceId, RefundMethod.OffsetAgainstBalance, new ReturnLine(line.Id, 2m));
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*nobody bought*");
+    }
+
+    [Fact]
+    public async Task Faulty_goods_are_refunded_without_being_put_back_on_the_shelf()
+    {
+        // The money goes back; the stock does not come in. Booking a broken laptop into sellable stock
+        // would simply sell it to the next customer.
+        await using var db = CreateContext(_companyA);
+
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var invoiceId = await InvoiceAsync(db, await DeliverDirectAsync(db, _customer, (_cable, 1m, null)));
+        var line = await db.SalesInvoiceLines.FirstAsync(l => l.SalesInvoiceId == invoiceId);
+
+        await CreditAsync(
+            db,
+            invoiceId,
+            RefundMethod.OffsetAgainstBalance,
+            new ReturnLine(line.Id, 1m, Restock: false));
+
+        await using var fresh = CreateContext(_companyA);
+
+        (await fresh.StockBalances.SingleAsync(b => b.ProductId == _cable)).Quantity
+            .Should().Be(9m, "the cable was faulty — it is not back on the shelf");
+
+        (await fresh.Customers.FirstAsync(c => c.Id == _customer)).Balance
+            .Should().Be(0m, "but they were still credited for it");
+    }
+
+    // --- Discount approval (requirements §32) --------------------------------------------------------
+
+    [Fact]
+    public async Task Selling_below_the_price_lists_floor_needs_approval()
+    {
+        // The floor is what a salesperson may not go under on their own authority. Without the approve
+        // permission, the sale is refused — silently accepting it would be the giveaway the floor exists
+        // to stop, and nobody would ever know it happened.
+        await using var db = CreateContext(_companyA);
+
+        await GiveCableAFloorAsync(db, floor: 70m);
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var act = async () => await SellAtCounterAsync(
+            db,
+            _walkIn,
+            lines: [new CounterSaleLine(_cable, 1m, UnitPrice: 60m)],   // under the 70 floor
+            methods: [new TenderLine(_cash, 100m)],
+            mayApproveDiscounts: false);
+
+        await act.Should().ThrowAsync<DomainException>().WithMessage("*approval*");
+
+        await using var fresh = CreateContext(_companyA);
+
+        (await fresh.SalesInvoices.AnyAsync()).Should().BeFalse();
+        (await fresh.StockBalances.SingleAsync(b => b.ProductId == _cable)).Quantity
+            .Should().Be(10m, "the goods never left — the whole sale was refused");
+    }
+
+    [Fact]
+    public async Task A_manager_may_authorise_a_price_below_the_floor_and_is_recorded_as_having_done_so()
+    {
+        // The question anyone asks later is not "was this approved?" but "who approved this?".
+        await using var db = CreateContext(_companyA);
+
+        await GiveCableAFloorAsync(db, floor: 70m);
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var result = await SellAtCounterAsync(
+            db,
+            _walkIn,
+            lines: [new CounterSaleLine(_cable, 1m, UnitPrice: 60m)],
+            methods: [new TenderLine(_cash, 100m)],
+            mayApproveDiscounts: true);
+
+        result.Total.Should().Be(63m, "60 + 5% tax");
+
+        await using var fresh = CreateContext(_companyA);
+
+        var line = await fresh.SalesInvoiceLines.FirstAsync(l => l.SalesInvoiceId == result.InvoiceId);
+
+        line.UnitPrice.Should().Be(60m);
+        line.PriceSource.Should().Contain("Manual price");
+    }
+
+    [Fact]
+    public async Task A_price_at_or_above_the_floor_needs_nobody()
+    {
+        await using var db = CreateContext(_companyA);
+
+        await GiveCableAFloorAsync(db, floor: 70m);
+        await ReceiveAsync(db, _cable, 10, 40m);
+
+        var result = await SellAtCounterAsync(
+            db,
+            _walkIn,
+            lines: [new CounterSaleLine(_cable, 1m, UnitPrice: 70m)],   // exactly on the floor
+            methods: [new TenderLine(_cash, 100m)],
+            mayApproveDiscounts: false);
+
+        result.Total.Should().Be(73.50m);
+    }
+
     // --- Fixture ------------------------------------------------------------------------------------
+
+    /// <summary>Puts the cable on a price list with a floor, which is what makes a discount approvable.</summary>
+    private async Task GiveCableAFloorAsync(ApplicationDbContext db, decimal floor)
+    {
+        var tier = new PriceTier { CompanyId = _companyA, Name = "Retail", IsDefault = true };
+        db.PriceTiers.Add(tier);
+        await db.SaveChangesAsync();
+
+        var list = new PriceList
+        {
+            CompanyId = _companyA,
+            Name = "Retail 2026",
+            PriceTierId = tier.Id,
+            CurrencyCode = "AED",
+            ValidFrom = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+        };
+
+        db.PriceLists.Add(list);
+        await db.SaveChangesAsync();
+
+        db.PriceListItems.Add(new PriceListItem
+        {
+            CompanyId = _companyA,
+            PriceListId = list.Id,
+            ProductId = _cable,
+            UnitPrice = 80m,
+            MinimumPrice = floor
+        });
+
+        await db.SaveChangesAsync();
+    }
+
+    private async Task<Guid> CreditAsync(
+        ApplicationDbContext db,
+        Guid invoiceId,
+        RefundMethod refund,
+        params ReturnLine[] lines) =>
+        await new IssueCreditNoteCommandHandler(db, Tenant(), Ledger(db), Numbers(db), new StubClock())
+            .Handle(
+                new IssueCreditNoteCommand(
+                    SalesInvoiceId: invoiceId,
+                    Lines: lines,
+                    Refund: refund,
+                    Reason: "Customer changed their mind",
+                    WarehouseId: _warehouseOfA),
+                CancellationToken.None);
 
     private async Task<Guid> PayAsync(
         ApplicationDbContext db,
@@ -883,8 +1241,10 @@ public class SalesTests : IAsyncLifetime
         ApplicationDbContext db,
         Guid customerId,
         IReadOnlyCollection<CounterSaleLine> lines,
-        IReadOnlyCollection<TenderLine> methods) =>
-        await new SellAtCounterCommandHandler(db, Tenant(), Ledger(db), Pricer(db), Numbers(db), new StubClock())
+        IReadOnlyCollection<TenderLine> methods,
+        bool mayApproveDiscounts = true) =>
+        await new SellAtCounterCommandHandler(
+                db, Tenant(), Ledger(db), Pricer(db), Discounts(db, mayApproveDiscounts), Numbers(db), new StubClock())
             .Handle(
                 new SellAtCounterCommand(
                     CustomerId: customerId,
@@ -944,7 +1304,8 @@ public class SalesTests : IAsyncLifetime
         ApplicationDbContext db,
         Guid customerId,
         params (Guid ProductId, decimal Quantity)[] lines) =>
-        await new CreateSalesOrderCommandHandler(db, Tenant(), Pricer(db), Numbers(db), new StubClock())
+        await new CreateSalesOrderCommandHandler(
+                db, Tenant(), Pricer(db), Discounts(db), Numbers(db), new StubClock())
             .Handle(
                 new CreateSalesOrderCommand(
                     CustomerId: customerId,
@@ -984,11 +1345,19 @@ public class SalesTests : IAsyncLifetime
                 CancellationToken.None);
 
     private async Task<Guid> InvoiceAsync(ApplicationDbContext db, Guid deliveryId) =>
-        await new RaiseInvoiceCommandHandler(db, Tenant(), Pricer(db), Numbers(db), new StubClock())
+        await new RaiseInvoiceCommandHandler(
+                db, Tenant(), Pricer(db), Discounts(db), Numbers(db), new StubClock())
             .Handle(new RaiseInvoiceCommand(deliveryId), CancellationToken.None);
 
     private SalesLinePricer Pricer(ApplicationDbContext db) =>
         new(new PriceResolver(db, new StubClock()), new TaxResolver(db, new StubClock()));
+
+    /// <summary>
+    /// The real authorizer, with a stubbed permission service — so a test can be the salesperson who may
+    /// not discount below the floor, or the manager who may.
+    /// </summary>
+    private static DiscountAuthorizer Discounts(ApplicationDbContext db, bool mayApprove = true) =>
+        new(db, new StubPermissions(mayApprove), new StubUser());
 
     private StockLedger Ledger(ApplicationDbContext db) =>
         new(
@@ -1017,6 +1386,22 @@ public class SalesTests : IAsyncLifetime
     {
         public Guid? CompanyId { get; } = companyId;
         public bool HasTenant => CompanyId.HasValue;
+    }
+
+    private sealed class StubPermissions(bool mayApprove) : IPermissionService
+    {
+        public Task<IReadOnlyCollection<PermissionGrant>> GetGrantsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyCollection<PermissionGrant>>([]);
+
+        public Task<bool> HasPermissionAsync(string feature, PermissionAction action, CancellationToken ct = default) =>
+            Task.FromResult(action != PermissionAction.Approve || mayApprove);
+
+        public Task DemandAsync(string feature, PermissionAction action, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public void InvalidateCache(Guid companyUserId)
+        {
+        }
     }
 
     private sealed class StubUser : ICurrentUser

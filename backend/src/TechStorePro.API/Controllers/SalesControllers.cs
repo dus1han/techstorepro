@@ -6,6 +6,7 @@ using TechStorePro.Application.Sales.Payments;
 using TechStorePro.Application.Sales.Pos;
 using TechStorePro.Application.Sales.Queries;
 using TechStorePro.Application.Sales.Quotations;
+using TechStorePro.Application.Sales.Returns;
 using TechStorePro.Domain.Sales;
 using Microsoft.AspNetCore.Mvc;
 
@@ -232,6 +233,43 @@ public class CustomerPaymentsController : ApiControllerBase
         var id = await Mediator.Send(command);
         return CreatedAtAction(nameof(Record), new { id }, id);
     }
+}
+
+/// <summary>
+/// Returns and credit notes (requirements §24).
+///
+/// <b>A credit note is the only thing in sales that puts stock back</b> — and it is not a cancelled
+/// invoice. Cancelling paperwork does not un-deliver goods, and an invoice that has been paid cannot be
+/// cancelled at all. The goods came back and the money goes back: two facts, one document.
+///
+/// Returned serials go to <c>Returned</c>, never straight to <c>InStock</c>. A machine that came back is
+/// inspected before it is sold to somebody else, and the serial state machine will not let it skip that.
+/// </summary>
+[Route("api/v1/credit-notes")]
+public class CreditNotesController : ApiControllerBase
+{
+    [HttpGet]
+    public async Task<ActionResult<PagedResult<CreditNoteDto>>> List(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25,
+        [FromQuery] string? search = null,
+        [FromQuery] Guid? customerId = null) =>
+        Ok(await Mediator.Send(new GetCreditNotesQuery(page, pageSize, search, customerId)));
+
+    [HttpPost]
+    public async Task<ActionResult<Guid>> Issue(IssueCreditNoteCommand command)
+    {
+        var id = await Mediator.Send(command);
+        return CreatedAtAction(nameof(Issue), new { id }, id);
+    }
+
+    /// <summary>
+    /// What credit a customer holds, and where every dirham of it came from — a ledger, not a number,
+    /// because "why do I have 240 credit?" is a question that needs an answer.
+    /// </summary>
+    [HttpGet("store-credit/{customerId:guid}")]
+    public async Task<ActionResult<StoreCreditDto>> StoreCredit(Guid customerId) =>
+        Ok(await Mediator.Send(new GetStoreCreditQuery(customerId)));
 }
 
 /// <summary>

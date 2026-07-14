@@ -59,6 +59,14 @@ public interface IApplicationDbContext
     DbSet<CustomerPayment> CustomerPayments { get; }
     DbSet<CustomerPaymentMethod> CustomerPaymentMethods { get; }
     DbSet<CustomerPaymentAllocation> CustomerPaymentAllocations { get; }
+    DbSet<CreditNote> CreditNotes { get; }
+    DbSet<CreditNoteLine> CreditNoteLines { get; }
+
+    /// <summary>
+    /// Store credit, as a ledger. The balance is the SUM of these — never a column on the customer, which
+    /// would be a figure nobody could explain.
+    /// </summary>
+    DbSet<StoreCreditEntry> StoreCreditEntries { get; }
 
     /// <summary>
     /// Requests the API has already answered. Written by <c>IdempotencyFilter</c>, and by nothing else —

@@ -2,6 +2,7 @@ using TechStorePro.Application.Common.Exceptions;
 using TechStorePro.Application.Common.Interfaces;
 using TechStorePro.Application.Common.Security;
 using TechStorePro.Application.Sales.Common;
+using TechStorePro.Domain.Catalog;
 using TechStorePro.Domain.Configuration;
 using TechStorePro.Domain.Exceptions;
 using TechStorePro.Domain.Identity;
@@ -132,6 +133,11 @@ public class RecordPaymentCommandHandler : IRequestHandler<RecordPaymentCommand,
                     + "against the bank.");
             }
 
+            if (method.Kind == PaymentMethodKind.StoreCredit)
+            {
+                await RedeemStoreCreditAsync(payment, customer, tender.Amount, paidAt, cancellationToken);
+            }
+
             // Through the DbSet, and only the DbSet. See ReceiveGoodsCommand: adding to the parent's
             // collection as well would count the tender twice, and Amount is computed from it.
             _db.CustomerPaymentMethods.Add(new CustomerPaymentMethod
@@ -194,5 +200,46 @@ public class RecordPaymentCommandHandler : IRequestHandler<RecordPaymentCommand,
         customer.Balance -= payment.Amount;
 
         return payment.Id;
+    }
+
+    /// <summary>
+    /// Spending credit the customer already holds (requirements §24, "future usage").
+    ///
+    /// It is tender rather than a discount because that is what it is: the shop has already had this
+    /// money, from the goods that came back. Drawing it down is a negative entry on the store-credit
+    /// ledger, so the balance is always the sum of its history and never a number nobody can explain.
+    /// </summary>
+    private async Task RedeemStoreCreditAsync(
+        CustomerPayment payment,
+        Domain.Catalog.Customer customer,
+        decimal amount,
+        DateTimeOffset paidAt,
+        CancellationToken cancellationToken)
+    {
+        var held = await _db.StoreCreditEntries
+            .Where(e => e.CustomerId == customer.Id)
+            .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
+
+        if (amount > held)
+        {
+            // Spending credit they do not have would be the shop giving away goods for nothing, and the
+            // ledger would go negative with no record of where the money came from.
+            throw new DomainException(
+                $"{customer.Name} holds {held:0.##} in store credit and this tenders {amount:0.##}. "
+                + "Take the difference by another method.");
+        }
+
+        var entry = new StoreCreditEntry
+        {
+            CustomerId = customer.Id,
+            CustomerPaymentId = payment.Id,
+            Amount = -amount,   // signed, so the balance is a SUM and cannot be got wrong
+            OccurredAt = paidAt,
+            Reason = $"Redeemed against payment {payment.Number}"
+        };
+
+        entry.Validate();
+
+        _db.StoreCreditEntries.Add(entry);
     }
 }

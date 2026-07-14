@@ -58,6 +58,7 @@ public record RaiseInvoiceCommand(
     IReadOnlyCollection<ServiceLine>? ServiceLines = null,
     IReadOnlyCollection<LinePrice>? LinePrices = null,
     string? CurrencyCode = null,
+    Guid? DiscountApprovedBy = null,
     string? Notes = null) : IRequest<Guid>;
 
 public class RaiseInvoiceCommandValidator : AbstractValidator<RaiseInvoiceCommand>
@@ -83,6 +84,7 @@ public class RaiseInvoiceCommandHandler : IRequestHandler<RaiseInvoiceCommand, G
     private readonly IApplicationDbContext _db;
     private readonly ITenantContext _tenant;
     private readonly ISalesLinePricer _pricer;
+    private readonly IDiscountAuthorizer _discounts;
     private readonly IDocumentNumberGenerator _numbers;
     private readonly IDateTime _clock;
 
@@ -90,12 +92,14 @@ public class RaiseInvoiceCommandHandler : IRequestHandler<RaiseInvoiceCommand, G
         IApplicationDbContext db,
         ITenantContext tenant,
         ISalesLinePricer pricer,
+        IDiscountAuthorizer discounts,
         IDocumentNumberGenerator numbers,
         IDateTime clock)
     {
         _db = db;
         _tenant = tenant;
         _pricer = pricer;
+        _discounts = discounts;
         _numbers = numbers;
         _clock = clock;
     }
@@ -204,14 +208,16 @@ public class RaiseInvoiceCommandHandler : IRequestHandler<RaiseInvoiceCommand, G
 
             var product = await _db.Products.FirstAsync(p => p.Id == deliveryLine.ProductId, cancellationToken);
 
-            if (priced.RequiresApproval)
-            {
-                // The approval workflow lands in slice 3. Refusing is the honest answer until it does:
-                // billing below the floor without a signature is the giveaway the floor exists to stop.
-                throw new DomainException(
-                    $"{product.Name} is billed below its floor of {priced.MinimumPrice:0.##} and needs a "
-                    + "manager's approval (§32).");
-            }
+            // Below the floor on its price list. Someone with (Sales, Approve) has to own that — and who
+            // they were is stamped onto the line below, because the question anyone asks later is not
+            // "was this approved?" but "who approved this?".
+            Guid? approvedBy = priced.RequiresApproval
+                ? await _discounts.AuthoriseAsync(
+                    product.Name,
+                    priced.MinimumPrice ?? 0m,
+                    request.DiscountApprovedBy,
+                    cancellationToken)
+                : null;
 
             var invoiceLine = new SalesInvoiceLine
             {
@@ -228,7 +234,9 @@ public class RaiseInvoiceCommandHandler : IRequestHandler<RaiseInvoiceCommand, G
 
                 // Carried from the delivery, where the ledger valued it. Not recomputed: by now the
                 // average may have moved, and the margin on this sale would be restated by accident.
-                UnitCost = deliveryLine.UnitCost
+                UnitCost = deliveryLine.UnitCost,
+
+                DiscountApprovedBy = approvedBy
             };
 
             _db.SalesInvoiceLines.Add(invoiceLine);

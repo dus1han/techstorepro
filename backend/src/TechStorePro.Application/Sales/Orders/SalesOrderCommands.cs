@@ -27,6 +27,11 @@ public record OrderLine(
 /// Raise a sales order (requirements §22). It is created as a <b>draft</b> and reserves nothing —
 /// see <see cref="ConfirmSalesOrderCommand"/>, which is where the shelf is committed.
 /// </summary>
+/// <param name="DiscountApprovedBy">
+/// The manager who authorised a price below the floor, when that is not the person raising the order
+/// (§32). They must actually hold the approval permission — otherwise it is a name typed into a box,
+/// which is worse than no approval because it looks like one.
+/// </param>
 [RequiresPermission(FeatureCatalog.SalesOrders, PermissionAction.Create)]
 public record CreateSalesOrderCommand(
     Guid CustomerId,
@@ -36,6 +41,7 @@ public record CreateSalesOrderCommand(
     DateTimeOffset? OrderedAt = null,
     DateTimeOffset? ExpectedAt = null,
     string? CurrencyCode = null,
+    Guid? DiscountApprovedBy = null,
     string? Notes = null) : IRequest<Guid>;
 
 public class CreateSalesOrderCommandValidator : AbstractValidator<CreateSalesOrderCommand>
@@ -63,6 +69,7 @@ public class CreateSalesOrderCommandHandler : IRequestHandler<CreateSalesOrderCo
     private readonly IApplicationDbContext _db;
     private readonly ITenantContext _tenant;
     private readonly ISalesLinePricer _pricer;
+    private readonly IDiscountAuthorizer _discounts;
     private readonly IDocumentNumberGenerator _numbers;
     private readonly IDateTime _clock;
 
@@ -70,12 +77,14 @@ public class CreateSalesOrderCommandHandler : IRequestHandler<CreateSalesOrderCo
         IApplicationDbContext db,
         ITenantContext tenant,
         ISalesLinePricer pricer,
+        IDiscountAuthorizer discounts,
         IDocumentNumberGenerator numbers,
         IDateTime clock)
     {
         _db = db;
         _tenant = tenant;
         _pricer = pricer;
+        _discounts = discounts;
         _numbers = numbers;
         _clock = clock;
     }
@@ -123,12 +132,13 @@ public class CreateSalesOrderCommandHandler : IRequestHandler<CreateSalesOrderCo
 
             if (priced.RequiresApproval)
             {
-                // The discount workflow lands in slice 3. Until it does, refusing is the honest answer:
-                // silently accepting a line below its floor would be the giveaway the floor exists to
-                // stop, and nobody would ever know it happened.
-                throw new DomainException(
-                    $"{product.Name} is priced below its floor of {priced.MinimumPrice:0.##} and needs "
-                    + "a manager's approval (§32).");
+                // Below the floor on its price list. Somebody with (Sales, Approve) has to own that, and
+                // the authoriser throws if nobody does — §32's "discount limits / manager approval".
+                await _discounts.AuthoriseAsync(
+                    product.Name,
+                    priced.MinimumPrice ?? 0m,
+                    request.DiscountApprovedBy,
+                    cancellationToken);
             }
 
             _db.SalesOrderLines.Add(new SalesOrderLine

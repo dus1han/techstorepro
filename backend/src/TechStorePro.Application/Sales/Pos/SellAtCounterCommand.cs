@@ -52,6 +52,9 @@ public record SellAtCounterCommand(
     IReadOnlyCollection<CounterSaleLine> Lines,
     IReadOnlyCollection<TenderLine> Methods,
     DateTimeOffset? SoldAt = null,
+
+    /// <summary>The manager called over to authorise a price below the floor (§32).</summary>
+    Guid? DiscountApprovedBy = null,
     string? Notes = null) : IRequest<CounterSaleResult>;
 
 public class SellAtCounterCommandValidator : AbstractValidator<SellAtCounterCommand>
@@ -86,6 +89,7 @@ public class SellAtCounterCommandHandler : IRequestHandler<SellAtCounterCommand,
     private readonly ITenantContext _tenant;
     private readonly IStockLedger _ledger;
     private readonly ISalesLinePricer _pricer;
+    private readonly IDiscountAuthorizer _discounts;
     private readonly IDocumentNumberGenerator _numbers;
     private readonly IDateTime _clock;
 
@@ -94,6 +98,7 @@ public class SellAtCounterCommandHandler : IRequestHandler<SellAtCounterCommand,
         ITenantContext tenant,
         IStockLedger ledger,
         ISalesLinePricer pricer,
+        IDiscountAuthorizer discounts,
         IDocumentNumberGenerator numbers,
         IDateTime clock)
     {
@@ -101,6 +106,7 @@ public class SellAtCounterCommandHandler : IRequestHandler<SellAtCounterCommand,
         _tenant = tenant;
         _ledger = ledger;
         _pricer = pricer;
+        _discounts = discounts;
         _numbers = numbers;
         _clock = clock;
     }
@@ -141,13 +147,15 @@ public class SellAtCounterCommandHandler : IRequestHandler<SellAtCounterCommand,
         // is not the end of the transaction — nothing is committed until the money is in.
         await _db.SaveChangesAsync(cancellationToken);
 
-        var invoiceId = await new RaiseInvoiceCommandHandler(_db, _tenant, _pricer, _numbers, _clock)
+        var invoiceId = await new RaiseInvoiceCommandHandler(
+                _db, _tenant, _pricer, _discounts, _numbers, _clock)
             .PostAsync(
                 new RaiseInvoiceCommand(
                     delivered.Delivery.Id,
                     InvoicedAt: soldAt,
                     DueAt: soldAt,
-                    LinePrices: prices),
+                    LinePrices: prices,
+                    DiscountApprovedBy: request.DiscountApprovedBy),
                 cancellationToken);
 
         await _db.SaveChangesAsync(cancellationToken);

@@ -273,6 +273,105 @@ public class SalesInvoiceConfiguration : IEntityTypeConfiguration<SalesInvoice>
     }
 }
 
+public class CreditNoteConfiguration : IEntityTypeConfiguration<CreditNote>
+{
+    public void Configure(EntityTypeBuilder<CreditNote> builder)
+    {
+        builder.ToTable("credit_notes");
+
+        builder.Property(c => c.Number).HasMaxLength(50).IsRequired();
+        builder.Property(c => c.Status).HasConversion<short>();
+        builder.Property(c => c.RefundMethod).HasConversion<short>();
+        builder.Property(c => c.CurrencyCode).HasMaxLength(3).IsRequired();
+        builder.Property(c => c.Reason).HasMaxLength(500).IsRequired();
+        builder.Property(c => c.Notes).HasMaxLength(1000);
+        builder.Property(c => c.DeletedReason).HasMaxLength(500);
+
+        builder.Ignore(c => c.NetTotal);
+        builder.Ignore(c => c.TaxTotal);
+        builder.Ignore(c => c.Total);
+        builder.Ignore(c => c.CostTotal);
+
+        builder.HasIndex(c => new { c.CompanyId, c.Number })
+            .IsUnique()
+            .HasFilter("is_deleted = false");
+
+        builder.HasIndex(c => new { c.CompanyId, c.SalesInvoiceId });
+        builder.HasIndex(c => new { c.CompanyId, c.CustomerId, c.IssuedAt });
+
+        builder.HasOne(c => c.Customer).WithMany().HasForeignKey(c => c.CustomerId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(c => c.Branch).WithMany().HasForeignKey(c => c.BranchId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(c => c.SalesInvoice).WithMany().HasForeignKey(c => c.SalesInvoiceId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(c => c.Warehouse).WithMany().HasForeignKey(c => c.WarehouseId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class CreditNoteLineConfiguration : IEntityTypeConfiguration<CreditNoteLine>
+{
+    public void Configure(EntityTypeBuilder<CreditNoteLine> builder)
+    {
+        builder.ToTable("credit_note_lines");
+
+        builder.Property(l => l.Description).HasMaxLength(500).IsRequired();
+        builder.Property(l => l.Quantity).HasColumnType(CatalogTypes.Quantity);
+        builder.Property(l => l.UnitPrice).HasColumnType(CatalogTypes.Money);
+        builder.Property(l => l.DiscountPercent).HasColumnType(CatalogTypes.Percent);
+        builder.Property(l => l.DiscountAmount).HasColumnType(CatalogTypes.Money);
+        builder.Property(l => l.TaxPercent).HasColumnType(CatalogTypes.Percent);
+        builder.Property(l => l.UnitCost).HasColumnType(CatalogTypes.Money);
+        builder.Property(l => l.DeletedReason).HasMaxLength(500);
+
+        builder.Ignore(l => l.NetTotal);
+        builder.Ignore(l => l.TaxAmount);
+        builder.Ignore(l => l.LineTotal);
+        builder.Ignore(l => l.CostTotal);
+
+        builder.HasIndex(l => new { l.CompanyId, l.CreditNoteId });
+
+        // How much of an invoice line has already come back. The handler sums this to refuse crediting
+        // more than was sold.
+        builder.HasIndex(l => new { l.CompanyId, l.SalesInvoiceLineId });
+
+        builder.HasOne(l => l.CreditNote).WithMany(c => c.Lines)
+            .HasForeignKey(l => l.CreditNoteId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasOne(l => l.SalesInvoiceLine).WithMany()
+            .HasForeignKey(l => l.SalesInvoiceLineId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(l => l.Product).WithMany().HasForeignKey(l => l.ProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class StoreCreditEntryConfiguration : IEntityTypeConfiguration<StoreCreditEntry>
+{
+    public void Configure(EntityTypeBuilder<StoreCreditEntry> builder)
+    {
+        builder.ToTable("store_credit_entries");
+
+        builder.Property(e => e.Amount).HasColumnType(CatalogTypes.Money);
+        builder.Property(e => e.Reason).HasMaxLength(500).IsRequired();
+        builder.Property(e => e.DeletedReason).HasMaxLength(500);
+
+        // "What credit does this customer hold?" is a SUM over this index, and it is asked at the till on
+        // every sale a credit-holding customer makes.
+        builder.HasIndex(e => new { e.CompanyId, e.CustomerId, e.OccurredAt });
+
+        builder.HasOne(e => e.Customer).WithMany().HasForeignKey(e => e.CustomerId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(e => e.CreditNote).WithMany().HasForeignKey(e => e.CreditNoteId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(e => e.CustomerPayment).WithMany().HasForeignKey(e => e.CustomerPaymentId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
 public class CustomerPaymentConfiguration : IEntityTypeConfiguration<CustomerPayment>
 {
     public void Configure(EntityTypeBuilder<CustomerPayment> builder)

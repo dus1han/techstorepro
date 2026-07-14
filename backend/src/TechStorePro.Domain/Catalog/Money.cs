@@ -59,7 +59,16 @@ public enum PaymentMethodKind : short
     Card = 3,
     Cheque = 4,
     Online = 5,
-    Custom = 6
+    Custom = 6,
+
+    /// <summary>
+    /// Credit the customer already holds, from a return settled that way (requirements §24).
+    ///
+    /// It is a payment method rather than a discount because that is what it is: the shop has already had
+    /// the money. Tendering it draws down <c>store_credit_entries</c>, and a customer cannot spend credit
+    /// they do not have — checked when the payment is taken.
+    /// </summary>
+    StoreCredit = 7
 }
 
 public class PaymentMethod : TenantEntity

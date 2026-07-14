@@ -70,6 +70,10 @@ public static class DependencyInjection
         // must not price the same line three different ways.
         services.AddScoped<ISalesLinePricer, SalesLinePricer>();
 
+        // Selling below the price list's floor needs (Sales, Approve) — §32's manager approval, expressed
+        // as a permission rather than a queue. There is a customer standing at the counter.
+        services.AddScoped<IDiscountAuthorizer, DiscountAuthorizer>();
+
         // P3 — the stock ledger. Registered once, injected everywhere stock moves, and the only thing
         // in the system permitted to write stock_movements, stock_balances or a serial's status
         // (architecture.md §4.5).

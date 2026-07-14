@@ -652,6 +652,108 @@ public class CrossTenantIsolationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Money_taken_and_money_given_back_are_isolated_per_company_too()
+    {
+        // Payments, credit notes and store credit. These are the rows that say what a company earned and
+        // what it gave back — and store credit in particular is a liability: leaking it across tenants
+        // would let one shop's customer spend another shop's money.
+        await using var asA = CreateContext(_companyA);
+
+        var customer = new Customer { CompanyId = _companyA, Code = "A-PAY", Name = "A's payer" };
+        asA.Customers.Add(customer);
+        await asA.SaveChangesAsync();
+
+        var invoice = new SalesInvoice
+        {
+            CompanyId = _companyA,
+            Number = "INV-2026-00009",
+            CustomerId = customer.Id,
+            BranchId = _branchOfA,
+            Status = SalesInvoiceStatus.Posted,
+            InvoicedAt = DateTimeOffset.UnixEpoch
+        };
+
+        var method = new PaymentMethod
+        {
+            CompanyId = _companyA,
+            Name = "Cash",
+            Kind = PaymentMethodKind.Cash,
+            ValidFrom = DateTimeOffset.UnixEpoch
+        };
+
+        asA.SalesInvoices.Add(invoice);
+        asA.PaymentMethods.Add(method);
+        await asA.SaveChangesAsync();
+
+        var payment = new CustomerPayment
+        {
+            CompanyId = _companyA,
+            Number = "PAY-2026-00001",
+            CustomerId = customer.Id,
+            BranchId = _branchOfA,
+            PaidAt = DateTimeOffset.UnixEpoch
+        };
+
+        var creditNote = new CreditNote
+        {
+            CompanyId = _companyA,
+            Number = "CN-2026-00001",
+            CustomerId = customer.Id,
+            BranchId = _branchOfA,
+            SalesInvoiceId = invoice.Id,
+            IssuedAt = DateTimeOffset.UnixEpoch,
+            RefundMethod = RefundMethod.StoreCredit,
+            Reason = "Returned"
+        };
+
+        asA.CustomerPayments.Add(payment);
+        asA.CreditNotes.Add(creditNote);
+        await asA.SaveChangesAsync();
+
+        asA.CustomerPaymentMethods.Add(new CustomerPaymentMethod
+        {
+            CompanyId = _companyA,
+            CustomerPaymentId = payment.Id,
+            PaymentMethodId = method.Id,
+            Amount = 100m
+        });
+
+        asA.CustomerPaymentAllocations.Add(new CustomerPaymentAllocation
+        {
+            CompanyId = _companyA,
+            CustomerPaymentId = payment.Id,
+            SalesInvoiceId = invoice.Id,
+            Amount = 100m
+        });
+
+        asA.StoreCreditEntries.Add(new StoreCreditEntry
+        {
+            CompanyId = _companyA,
+            CustomerId = customer.Id,
+            CreditNoteId = creditNote.Id,
+            Amount = 100m,
+            OccurredAt = DateTimeOffset.UnixEpoch,
+            Reason = "Credit note CN-2026-00001"
+        });
+
+        await asA.SaveChangesAsync();
+
+        await using var asB = CreateContext(_companyB);
+
+        (await asB.CustomerPayments.CountAsync()).Should().Be(0);
+        (await asB.CustomerPaymentMethods.CountAsync()).Should().Be(0);
+        (await asB.CustomerPaymentAllocations.CountAsync()).Should().Be(0);
+        (await asB.CreditNotes.CountAsync()).Should().Be(0);
+        (await asB.CreditNoteLines.CountAsync()).Should().Be(0);
+
+        (await asB.StoreCreditEntries.CountAsync())
+            .Should().Be(0, "store credit is a liability — one shop's customer must not spend another's");
+
+        (await asB.CustomerPayments.FirstOrDefaultAsync(p => p.Id == payment.Id)).Should().BeNull();
+        (await asB.CreditNotes.FirstOrDefaultAsync(c => c.Id == creditNote.Id)).Should().BeNull();
+    }
+
+    [Fact]
     public async Task Two_companies_may_each_raise_invoice_number_one()
     {
         // Document numbers are per (company, branch, type, year). Global uniqueness would mean one shop's
